@@ -1,0 +1,16 @@
+# Ignore all log files
+*.log
+*.env
+
+# Ignore all Python cache files (pycache directories and .pyc files)
+*.pyc
+*.pyo
+__pycache__/
+
+# Ignore all paracite specific temp files
+*.pdf
+*.json
+*.csv
+
+# Ignore all VS Code configuration files
+.vscode/
