@@ -1,4 +1,4 @@
-# Paracite
+# Bibliograph
 
 **Paracite** is a research discovery workspace for building a secondary paper retrieval pipeline centered on semantic search and Zotero PDF ingestion.
 
