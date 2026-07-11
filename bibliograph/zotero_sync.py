@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 from collections.abc import Callable
@@ -62,7 +63,8 @@ def sync_collection(
     so callers can resolve them even when attachment keys are unavailable.
     """
     report = SyncReport()
-    storage_dir = Path(zotero_storage_dir) if zotero_storage_dir else None
+    storage_dirs = zotero_storage_dirs(zotero_storage_dir)
+    logger.info("Checking %d local Zotero storage directories first", len(storage_dirs))
     items = zotero.everything(zotero.collection_items(collection_key))
     logger.info("Found %d Zotero items in collection", len(items))
     for item in items:
@@ -105,12 +107,15 @@ def sync_collection(
                 missing_keys.append("")
                 continue
             local_path = _find_local_pdf(pdf_dir, attachment_key, item_key, item_data.get("DOI"))
-            if local_path is None and storage_dir is not None:
-                zotero_path = find_zotero_local_pdf(storage_dir, attachment_key)
-                if zotero_path is not None:
+            if local_path is None:
+                for storage_dir in storage_dirs:
+                    zotero_path = find_zotero_local_pdf(storage_dir, attachment_key)
+                    if zotero_path is None:
+                        continue
                     local_path = import_zotero_pdf(zotero_path, pdf_dir, attachment_key)
                     report.imported.append(attachment_key)
                     logger.info("Imported Zotero local PDF: %s", zotero_path)
+                    break
             if local_path is None:
                 report.missing_local_pdf.append(attachment_key)
                 missing_keys.append(attachment_key)
@@ -167,6 +172,38 @@ def find_zotero_local_pdf(storage_dir: str | Path, attachment_key: str) -> Path 
         if candidate.is_file() and is_pdf_file(candidate):
             return candidate
     return None
+
+
+def zotero_storage_dirs(storage_dir: str | Path | None = None) -> tuple[Path, ...]:
+    """Return configured or conventionally located Zotero storage directories."""
+    candidates: list[Path] = []
+    if storage_dir:
+        candidates.append(Path(storage_dir).expanduser())
+    else:
+        configured = os.getenv("ZOTERO_STORAGE_DIR")
+        if configured:
+            candidates.append(Path(configured).expanduser())
+        else:
+            home = Path.home()
+            candidates.extend(
+                [
+                    home / "Zotero" / "storage",
+                    home / ".zotero" / "zotero" / "storage",
+                    home / "Library" / "Application Support" / "Zotero" / "storage",
+                ]
+            )
+            appdata = os.getenv("APPDATA")
+            if appdata:
+                candidates.extend(Path(appdata).glob("Zotero/Zotero/Profiles/*/storage"))
+            candidates.extend(home.glob(".zotero/zotero/*/storage"))
+            candidates.extend(home.glob("Library/Application Support/Zotero/Profiles/*/storage"))
+
+    unique: list[Path] = []
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved.is_dir() and resolved not in unique:
+            unique.append(resolved)
+    return tuple(unique)
 
 
 def import_zotero_pdf(source: str | Path, output_dir: str | Path, attachment_key: str) -> Path:

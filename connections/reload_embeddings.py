@@ -9,6 +9,7 @@ from bibliograph.zotero_sync import (
     is_pdf_attachment,
     is_pdf_file,
     is_remote_downloadable_item,
+    zotero_storage_dirs,
 )
 
 
@@ -201,8 +202,8 @@ def download_pdf_for_item(
     existing = find_local_pdf(output_dir, selected_key)
     if existing:
         return DownloadResult(str(existing), downloaded=False, attachment_key=selected_key)
-    if zotero_storage_dir:
-        zotero_path = find_zotero_local_pdf(zotero_storage_dir, selected_key)
+    for storage_dir in zotero_storage_dirs(zotero_storage_dir):
+        zotero_path = find_zotero_local_pdf(storage_dir, selected_key)
         if zotero_path is not None:
             imported = import_zotero_pdf(zotero_path, output_dir, selected_key)
             return DownloadResult(str(imported), downloaded=True, attachment_key=selected_key)

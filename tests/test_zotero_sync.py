@@ -3,7 +3,12 @@ from tempfile import TemporaryDirectory
 
 from bibliograph.embeddings import HashEmbedder
 from bibliograph.store import SQLiteIndex
-from bibliograph.zotero_sync import is_pdf_attachment, is_remote_downloadable_item, sync_collection
+from bibliograph.zotero_sync import (
+    is_pdf_attachment,
+    is_remote_downloadable_item,
+    sync_collection,
+    zotero_storage_dirs,
+)
 
 
 class _Zotero:
@@ -127,3 +132,12 @@ def test_sync_imports_pdf_from_local_zotero_storage_before_reporting_missing():
         assert report.missing_papers == []
         assert (cache / "A1.pdf").read_bytes() == b"%PDF-from-zotero"
         assert calls == ["A1.pdf"]
+
+
+def test_zotero_storage_directory_can_be_discovered_from_environment(monkeypatch):
+    with TemporaryDirectory(dir=".") as directory:
+        storage = Path(directory) / "storage"
+        storage.mkdir()
+        monkeypatch.setenv("ZOTERO_STORAGE_DIR", str(storage))
+
+        assert zotero_storage_dirs() == (storage.resolve(),)

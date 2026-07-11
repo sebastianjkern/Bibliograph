@@ -63,7 +63,7 @@ ZOTERO_STORAGE_DIR=path/to/zotero/storage
 
 Use `ZOTERO_LIBRARY_TYPE=group` for a group library. The API key must have read access to the library.
 
-`ZOTERO_STORAGE_DIR` should point to Zotero's local `storage` directory. When set, Bibliograph imports valid PDFs from `storage/<attachment-key>/` into `pdfs` before trying any API or remote download. On Windows this is commonly under `%APPDATA%\Zotero\Zotero\Profiles\<profile>\storage`; on Linux, under `~/.zotero/zotero/<profile>/storage`.
+`ZOTERO_STORAGE_DIR` can point to Zotero's local `storage` directory. Bibliograph checks this directory first and imports valid PDFs from `storage/<attachment-key>/` into `pdfs` before trying any API or remote download. If it is unset, standard Zotero profile locations are discovered automatically. On Windows this is commonly under `%APPDATA%\Zotero\Zotero\Profiles\<profile>\storage`; on Linux, under `~/.zotero/zotero/<profile>/storage`.
 
 ### Create a draft
 

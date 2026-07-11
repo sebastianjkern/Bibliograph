@@ -28,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--db", default="bibliograph.db", help="SQLite index path")
     parser.add_argument(
         "--zotero-storage-dir",
-        default=os.getenv("ZOTERO_STORAGE_DIR"),
+        default=None,
         help="Local Zotero storage directory (usually .../storage)",
     )
     parser.add_argument(
