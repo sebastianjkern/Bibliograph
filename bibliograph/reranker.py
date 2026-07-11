@@ -3,6 +3,7 @@ import re
 from collections.abc import Sequence
 from typing import Protocol
 
+from .config import DEFAULT_OPENAI_API_KEY, DEFAULT_OPENAI_BASE_URL
 from .models import CitationSource, DraftMatch
 
 
@@ -20,7 +21,13 @@ class HeuristicReranker:
 
 
 class OpenAIReranker:
-    def __init__(self, model: str, api_key: str, base_url: str | None = None, client=None):
+    def __init__(
+        self,
+        model: str,
+        api_key: str = DEFAULT_OPENAI_API_KEY,
+        base_url: str | None = None,
+        client=None,
+    ):
         if client is None:
             try:
                 from openai import OpenAI
@@ -28,7 +35,7 @@ class OpenAIReranker:
                 raise RuntimeError(
                     "LLM reranking requires the optional 'llm' dependencies"
                 ) from exc
-            client = OpenAI(api_key=api_key, base_url=base_url)
+            client = OpenAI(api_key=api_key, base_url=base_url or DEFAULT_OPENAI_BASE_URL)
         self.client = client
         self.model = model
 

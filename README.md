@@ -86,10 +86,10 @@ Existing LaTeX citations such as `\\citep{smith2022}` and Typst citations such a
 
 ### Choose an embedding backend
 
-The default hash backend is deterministic and useful for testing, but it is not a meaningful semantic model:
+The default backend is the cached `all-MiniLM-L6-v2` SentenceTransformer model. Its first use downloads the model; later runs reuse the local cache. For a dependency-free deterministic smoke test, explicitly select the hash backend:
 
 ```bash
-uv run bibliograph check example.tex "My Collection"
+uv run bibliograph --embedding-provider hash check example.tex "My Collection"
 ```
 
 For local semantic embeddings, use SentenceTransformers:

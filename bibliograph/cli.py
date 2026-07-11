@@ -2,6 +2,7 @@ import argparse
 import os
 from pathlib import Path
 
+from .config import DEFAULT_LLM_MODEL
 from .drafts import parse_draft_file
 from .embeddings import HashEmbedder, OpenAICompatibleEmbedder, SentenceTransformerEmbedder
 from .export import to_markdown
@@ -20,8 +21,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--embedding-provider",
         choices=("hash", "sentence-transformers", "openai"),
-        default="hash",
-        help="Embedding backend (default: hash)",
+        default="sentence-transformers",
+        help="Embedding backend (default: sentence-transformers)",
     )
     parser.add_argument(
         "--model", help="Embedding model name for sentence-transformers or OpenAI-compatible APIs"
@@ -50,8 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
         "download-pdf", help="Download one missing PDF attachment from Zotero"
     )
     download.add_argument(
-        "--source", choices=("zotero", "remote"), default="zotero",
-        help="PDF source (default: zotero)",
+        "--source", choices=("zotero", "remote"), default="remote",
+        help="PDF source (default: remote open-access resolver chain)",
     )
     download.add_argument(
         "item_key", nargs="?", help="Optional Zotero parent item or attachment key"
@@ -67,7 +68,12 @@ def build_parser() -> argparse.ArgumentParser:
     suggest.add_argument("--limit", type=int, default=5)
     suggest.add_argument("--min-score", type=float, default=0.0)
     suggest.add_argument("--output", type=Path)
-    suggest.add_argument("--llm-model", help="Optional chat model for grounded rationales")
+    suggest.add_argument("--llm-model", default=DEFAULT_LLM_MODEL)
+    suggest.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="Use deterministic rationales instead of the local LLM",
+    )
 
     check = subparsers.add_parser(
         "check", help="Sync one Zotero collection and check a Typst/LaTeX draft"
@@ -78,16 +84,26 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--limit", type=int, default=5)
     check.add_argument("--min-score", type=float, default=0.0)
     check.add_argument("--output", type=Path)
-    check.add_argument("--llm-model", help="Optional chat model for evidence reranking")
-    check.add_argument(
+    check.add_argument("--llm-model", default=DEFAULT_LLM_MODEL)
+    check.add_argument("--no-rerank", action="store_true", help="Skip LLM reranking")
+    download_group = check.add_mutually_exclusive_group()
+    download_group.add_argument(
         "--download-missing",
         action="store_true",
-        help="Download missing PDFs through the selected backend",
+        dest="download_missing",
+        help="Download missing PDFs (enabled by default)",
     )
+    download_group.add_argument(
+        "--no-download-missing",
+        action="store_false",
+        dest="download_missing",
+        help="Only report missing PDFs",
+    )
+    check.set_defaults(download_missing=True)
     check.add_argument(
         "--download-source",
         choices=("zotero", "remote"),
-        default="zotero",
+        default="remote",
         help="Source used with --download-missing",
     )
     return parser
@@ -201,14 +217,19 @@ def main(argv: list[str] | None = None) -> int:
                 limit=args.limit,
                 min_score=args.min_score,
             )
-            if args.llm_model:
-                api_key = os.getenv("OPENAI_API_KEY")
-                if not api_key:
-                    raise RuntimeError("OPENAI_API_KEY is required when --llm-model is used")
-                matches = rerank_matches(
-                    matches,
-                    OpenAIReranker(args.llm_model, api_key, os.getenv("OPENAI_BASE_URL")),
-                )
+            if not args.no_rerank:
+                try:
+                    matches = rerank_matches(
+                        matches,
+                        OpenAIReranker(
+                            args.llm_model,
+                            os.getenv("OPENAI_API_KEY", "lm-studio"),
+                            os.getenv("OPENAI_BASE_URL"),
+                        ),
+                    )
+                except Exception as error:
+                    print(f"LLM reranking unavailable; using retrieval order: {error}")
+                    matches = rerank_matches(matches, HeuristicReranker())
             else:
                 matches = rerank_matches(matches, HeuristicReranker())
             output = to_markdown(suggest_citations(matches))
@@ -235,15 +256,15 @@ def main(argv: list[str] | None = None) -> int:
             min_score=args.min_score,
         )
         generator = None
-        if args.llm_model:
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise RuntimeError("OPENAI_API_KEY is required when --llm-model is used")
-            generator = OpenAISuggestionGenerator(
-                args.llm_model,
-                api_key,
-                os.getenv("OPENAI_BASE_URL"),
-            )
+        if not args.no_llm:
+            try:
+                generator = OpenAISuggestionGenerator(
+                    args.llm_model,
+                    os.getenv("OPENAI_API_KEY", "lm-studio"),
+                    os.getenv("OPENAI_BASE_URL"),
+                )
+            except Exception as error:
+                print(f"LLM suggestions unavailable; using deterministic rationales: {error}")
         output = to_markdown(suggest_citations(matches, generator, args.min_score))
         if args.output:
             args.output.write_text(output, encoding="utf-8")

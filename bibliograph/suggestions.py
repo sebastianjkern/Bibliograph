@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
+from .config import DEFAULT_OPENAI_API_KEY, DEFAULT_OPENAI_BASE_URL
 from .models import CitationSource, DraftMatch
 
 
@@ -28,12 +29,18 @@ class GroundedTemplateGenerator:
 
 
 class OpenAISuggestionGenerator:
-    def __init__(self, model: str, api_key: str, base_url: str | None = None):
+    def __init__(
+        self,
+        model: str,
+        api_key: str = DEFAULT_OPENAI_API_KEY,
+        base_url: str | None = None,
+    ):
         from openai import OpenAI
 
-        kwargs = {"api_key": api_key}
-        if base_url:
-            kwargs["base_url"] = base_url
+        kwargs = {
+            "api_key": api_key,
+            "base_url": base_url or DEFAULT_OPENAI_BASE_URL,
+        }
         self.client = OpenAI(**kwargs)
         self.model = model
 

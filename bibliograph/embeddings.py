@@ -5,6 +5,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
+from .config import (
+    DEFAULT_OPENAI_API_KEY,
+    DEFAULT_OPENAI_BASE_URL,
+    DEFAULT_OPENAI_EMBEDDING_MODEL,
+    DEFAULT_SENTENCE_TRANSFORMER_MODEL,
+)
+
 
 class Embedder(Protocol):
     dimension: int
@@ -34,7 +41,7 @@ class HashEmbedder:
 class SentenceTransformerEmbedder:
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",
+        model_name: str = DEFAULT_SENTENCE_TRANSFORMER_MODEL,
         cache_dir: str | None = None,
         local_files_only: bool = False,
     ):
@@ -61,7 +68,7 @@ class SentenceTransformerEmbedder:
                 "HF_HUB_OFFLINE"
             )
         return cls(
-            model_name or os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
+            model_name or os.getenv("EMBEDDING_MODEL") or DEFAULT_SENTENCE_TRANSFORMER_MODEL,
             cache_dir,
             local_files_only,
         )
@@ -105,7 +112,10 @@ class OpenAICompatibleEmbedder:
                 raise RuntimeError(
                     "OpenAI-compatible embeddings require the optional 'embeddings' dependencies"
                 ) from exc
-            client = OpenAI(api_key=api_key, base_url=base_url)
+            client = OpenAI(
+                api_key=api_key or DEFAULT_OPENAI_API_KEY,
+                base_url=base_url or DEFAULT_OPENAI_BASE_URL,
+            )
         self.client = client
         self.model = model
         self.dimension = 0
@@ -113,9 +123,9 @@ class OpenAICompatibleEmbedder:
     @classmethod
     def from_environment(cls, model: str | None = None, base_url: str | None = None):
         return cls(
-            model or os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
-            os.getenv("OPENAI_API_KEY", ""),
-            base_url or os.getenv("OPENAI_BASE_URL"),
+            model or os.getenv("OPENAI_EMBEDDING_MODEL") or DEFAULT_OPENAI_EMBEDDING_MODEL,
+            os.getenv("OPENAI_API_KEY") or DEFAULT_OPENAI_API_KEY,
+            base_url or os.getenv("OPENAI_BASE_URL") or DEFAULT_OPENAI_BASE_URL,
         )
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
