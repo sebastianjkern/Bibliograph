@@ -2,6 +2,7 @@ import json
 import math
 import sqlite3
 from collections.abc import Iterable
+from hashlib import sha256
 from pathlib import Path
 
 from .models import CitationSource, Paper, TextChunk
@@ -19,6 +20,11 @@ class SQLiteIndex:
                 authors TEXT NOT NULL, year TEXT, doi TEXT, collections TEXT NOT NULL,
                 text TEXT NOT NULL, page INTEGER, section TEXT, chunk_index INTEGER NOT NULL,
                 embedding TEXT NOT NULL
+            )"""
+        )
+        self.connection.execute(
+            """CREATE TABLE IF NOT EXISTS indexed_files (
+                attachment_key TEXT PRIMARY KEY, source_version INTEGER, file_hash TEXT NOT NULL
             )"""
         )
         self.connection.commit()
@@ -74,6 +80,23 @@ class SQLiteIndex:
     def close(self) -> None:
         self.connection.close()
 
+    def needs_file_index(self, attachment_key: str, source_version: int | None, path: str) -> bool:
+        file_hash = _file_hash(path)
+        row = self.connection.execute(
+            "SELECT source_version, file_hash FROM indexed_files WHERE attachment_key = ?",
+            (attachment_key,),
+        ).fetchone()
+        return row is None or row != (source_version, file_hash)
+
+    def mark_file_indexed(self, attachment_key: str, source_version: int | None, path: str) -> None:
+        self.connection.execute(
+            """INSERT INTO indexed_files VALUES (?, ?, ?)
+            ON CONFLICT(attachment_key) DO UPDATE SET
+                source_version=excluded.source_version, file_hash=excluded.file_hash""",
+            (attachment_key, source_version, _file_hash(path)),
+        )
+        self.connection.commit()
+
 
 def _cosine(left: list[float], right: list[float]) -> float:
     if len(left) != len(right):
@@ -86,3 +109,11 @@ def _cosine(left: list[float], right: list[float]) -> float:
         if denominator
         else 0.0
     )
+
+
+def _file_hash(path: str) -> str:
+    digest = sha256()
+    with open(path, "rb") as file:
+        for block in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
