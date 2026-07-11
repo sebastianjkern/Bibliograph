@@ -19,6 +19,7 @@ This repository is an early-stage prototype rather than a finished product. It c
 * Collects Zotero items and collection metadata from a configured Zotero library.
 * Downloads one missing PDF at a time from Zotero or legal remote open-access sources.
 * Extracts text from local PDF files and splits it into searchable sentences.
+* Cleans PDF headers, footers, and page numbers; excludes reference sections; and embeds section-aware sentence groups.
 * Stores page-aware chunk embeddings and complete citation metadata in a persistent SQLite index using sqlite-vec nearest-neighbor search.
 * Supports deterministic local vectors, SentenceTransformer models, and OpenAI-compatible embedding APIs.
 * Scans a draft paragraph-by-paragraph and returns matching evidence with scores.
@@ -306,6 +307,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from bibliograph.drafts import parse_draft_file
+from bibliograph.config import EMBEDDING_CONTENT_VERSION
 from bibliograph.embeddings import SentenceTransformerEmbedder
 from bibliograph.export import to_markdown
 from bibliograph.remote import download_remote_pdf
@@ -336,7 +338,11 @@ def main() -> None:
     # Uses EMBEDDING_MODEL, SENTENCE_TRANSFORMERS_CACHE, and
     # SENTENCE_TRANSFORMERS_OFFLINE from the environment when configured.
     embedder = SentenceTransformerEmbedder.from_environment()
-    index = SQLiteIndex(args.db, dimension=embedder.dimension, embedding_id=embedder.identity)
+    index = SQLiteIndex(
+        args.db,
+        dimension=embedder.dimension,
+        embedding_id=f"{embedder.identity}:{EMBEDDING_CONTENT_VERSION}",
+    )
     zotero = load_zotero_client()
     collection_key = find_collection_key(zotero, args.collection)
 
@@ -430,7 +436,7 @@ Remove `--download-missing` to report missing papers without downloading them. S
 The repository is not yet a complete discovery system. Remaining issues include:
 
 * Zotero synchronization currently indexes local files and reports missing PDFs; downloading remains an explicit one-paper-at-a-time action.
-* OCR for scanned PDFs and structural section extraction are not yet included.
+* OCR for scanned PDFs and advanced publisher-specific document extraction are not yet included.
 * SQLite/sqlite-vec is optimized for local, single-user workloads; a dedicated vector service may be preferable for multi-user deployments.
 * No browser UI is included yet; Markdown export is the current review workflow.
 
@@ -438,7 +444,7 @@ The repository is not yet a complete discovery system. Remaining issues include:
 
 The next steps for the project are:
 
-* add OCR and better academic section/chunk extraction
+* add OCR and improve academic section/chunk extraction for difficult PDFs
 * benchmark sqlite-vec settings and add optional dedicated vector backends for larger deployments
 * add a lightweight UI or API server for review and citation insertion
 

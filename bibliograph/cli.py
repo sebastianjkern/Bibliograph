@@ -4,7 +4,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .config import DEFAULT_LLM_MODEL, openai_settings
+from .config import DEFAULT_LLM_MODEL, EMBEDDING_CONTENT_VERSION, openai_settings
 from .drafts import parse_draft_file
 from .embeddings import HashEmbedder, OpenAICompatibleEmbedder, SentenceTransformerEmbedder
 from .export import sources_to_markdown, to_markdown
@@ -201,7 +201,10 @@ def main(argv: list[str] | None = None) -> int:
         args.embedding_cache_dir,
         args.embedding_offline,
     )
-    index = SQLiteIndex(args.db, embedding_id=getattr(embedder, "identity", None))
+    embedding_id = getattr(embedder, "identity", None)
+    if embedding_id:
+        embedding_id = f"{embedding_id}:{EMBEDDING_CONTENT_VERSION}"
+    index = SQLiteIndex(args.db, embedding_id=embedding_id)
     logger.info("Using persistent vector index: %s", args.db)
     if index.reindexed:
         logger.info("Index cleared; local PDFs will be reindexed with the selected model")

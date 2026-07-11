@@ -16,6 +16,20 @@ def test_split_text_overlaps_and_preserves_all_short_text():
     assert chunks == ["one two three", "three four five"]
 
 
+def test_chunk_pages_preserves_section_context_in_embedding_text():
+    paper = Paper("SECTION", "Sectioned Paper")
+
+    chunks = chunk_pages(
+        paper,
+        [(2, "The result is important. It generalizes well.", "Results")],
+        max_words=20,
+        overlap_words=2,
+    )
+
+    assert chunks[0].section == "Results"
+    assert chunks[0].text.startswith("Section: Results\n\n")
+
+
 def test_index_returns_metadata_aware_match():
     paper = Paper("ABC", "A Paper", ("Ada Lovelace",), "1843", "10/example")
     chunks = chunk_pages(paper, [(4, "semantic citation retrieval")], max_words=10, overlap_words=1)
