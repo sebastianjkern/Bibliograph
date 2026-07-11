@@ -37,4 +37,6 @@ class CitationSource:
 class DraftMatch:
     draft_text: str
     sources: tuple[CitationSource, ...] = field(default_factory=tuple)
-
+    line_start: int | None = None
+    citation_keys: tuple[str, ...] = ()
+    source_format: str | None = None

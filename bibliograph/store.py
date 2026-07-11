@@ -1,5 +1,6 @@
 import json
 import math
+import re
 import sqlite3
 from collections.abc import Iterable
 from hashlib import sha256
@@ -60,11 +61,21 @@ class SQLiteIndex:
         self.connection.commit()
         return len(rows)
 
-    def search(self, embedding: list[float], limit: int = 5) -> list[CitationSource]:
+    def search(
+        self,
+        embedding: list[float],
+        limit: int = 5,
+        query_text: str | None = None,
+        semantic_weight: float = 0.75,
+    ) -> list[CitationSource]:
+        if not 0.0 <= semantic_weight <= 1.0:
+            raise ValueError("semantic_weight must be between 0 and 1")
         scored: list[CitationSource] = []
         for row in self.connection.execute("SELECT * FROM chunks"):
             source_embedding = json.loads(row[11])
-            score = _cosine(embedding, source_embedding)
+            semantic_score = _cosine(embedding, source_embedding)
+            lexical_score = _lexical_overlap(query_text, row[7]) if query_text else 0.0
+            score = semantic_weight * semantic_score + (1 - semantic_weight) * lexical_score
             paper = Paper(
                 row[1],
                 row[2],
@@ -109,6 +120,12 @@ def _cosine(left: list[float], right: list[float]) -> float:
         if denominator
         else 0.0
     )
+
+
+def _lexical_overlap(query: str, document: str) -> float:
+    query_terms = set(re.findall(r"[\w-]+", query.lower()))
+    document_terms = set(re.findall(r"[\w-]+", document.lower()))
+    return len(query_terms & document_terms) / len(query_terms) if query_terms else 0.0
 
 
 def _file_hash(path: str) -> str:

@@ -1,6 +1,7 @@
 import re
 from collections.abc import Iterable
 
+from .drafts import DraftClaim
 from .embeddings import Embedder
 from .models import DraftMatch
 from .store import SQLiteIndex
@@ -28,6 +29,36 @@ def find_citations(
         )
         matches.append(DraftMatch(passage, sources))
     return matches
+
+
+def find_claim_citations(
+    claims: Iterable[DraftClaim],
+    index: SQLiteIndex,
+    embedder: Embedder,
+    limit: int = 5,
+    min_score: float = 0.0,
+) -> list[DraftMatch]:
+    """Retrieve hybrid semantic/lexical evidence for parsed draft claims."""
+    claims = list(claims)
+    embeddings = embedder.embed([claim.text for claim in claims])
+    return [
+        DraftMatch(
+            claim.text,
+            tuple(
+                source
+                for source in index.search(
+                    embedding,
+                    limit,
+                    query_text=claim.text,
+                )
+                if source.score >= min_score
+            ),
+            claim.line_start,
+            claim.citation_keys,
+            claim.source_format,
+        )
+        for claim, embedding in zip(claims, embeddings, strict=True)
+    ]
 
 
 def flatten_sources(matches: Iterable[DraftMatch]) -> list[tuple[str, str, float]]:
