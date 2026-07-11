@@ -18,7 +18,7 @@ This repository is an early-stage prototype rather than a finished product. It c
 * Collects Zotero items and collection metadata from a configured Zotero library.
 * Downloads one missing PDF attachment at a time from Zotero by DOI, title, or item key.
 * Extracts text from local PDF files and splits it into searchable sentences.
-* Stores page-aware chunk embeddings and complete citation metadata in a persistent SQLite index.
+* Stores page-aware chunk embeddings and complete citation metadata in a persistent SQLite index using sqlite-vec nearest-neighbor search.
 * Supports deterministic local vectors, SentenceTransformer models, and OpenAI-compatible embedding APIs.
 * Scans a draft paragraph-by-paragraph and returns matching evidence with scores.
 * Formats grounded citation suggestions with author, year, DOI, and page information.
@@ -212,7 +212,7 @@ The repository is not yet a complete discovery system. Remaining issues include:
 
 * Zotero synchronization currently indexes local files and reports missing PDFs; downloading remains an explicit one-paper-at-a-time action.
 * OCR for scanned PDFs and structural section extraction are not yet included.
-* The SQLite index is intentionally small and uses brute-force cosine search.
+* SQLite/sqlite-vec is optimized for local, single-user workloads; a dedicated vector service may be preferable for multi-user deployments.
 * No browser UI is included yet; Markdown export is the current review workflow.
 
 ## Future direction
@@ -220,7 +220,7 @@ The repository is not yet a complete discovery system. Remaining issues include:
 The next steps for the project are:
 
 * add OCR and better academic section/chunk extraction
-* add a faster approximate-nearest-neighbor index for larger libraries
+* benchmark sqlite-vec settings and add optional dedicated vector backends for larger deployments
 * add a lightweight UI or API server for review and citation insertion
 
 ## Why this matters

@@ -6,15 +6,20 @@ from collections.abc import Iterable
 from hashlib import sha256
 from pathlib import Path
 
+import sqlite_vec
+
 from .models import CitationSource, Paper, TextChunk
 
 
 class SQLiteIndex:
-    """Small persistent vector index with complete source metadata."""
+    """Persistent metadata store backed by sqlite-vec nearest-neighbor search."""
 
-    def __init__(self, path: str | Path = "bibliograph.db"):
+    def __init__(self, path: str | Path = "bibliograph.db", dimension: int | None = None):
         self.path = str(path)
         self.connection = sqlite3.connect(self.path)
+        self.connection.enable_load_extension(True)
+        sqlite_vec.load(self.connection)
+        self.connection.enable_load_extension(False)
         self.connection.execute(
             """CREATE TABLE IF NOT EXISTS chunks (
                 chunk_id TEXT PRIMARY KEY, zotero_key TEXT NOT NULL, title TEXT NOT NULL,
@@ -28,11 +33,18 @@ class SQLiteIndex:
                 attachment_key TEXT PRIMARY KEY, source_version INTEGER, file_hash TEXT NOT NULL
             )"""
         )
+        self.connection.execute(
+            "CREATE TABLE IF NOT EXISTS vector_meta (dimension INTEGER NOT NULL)"
+        )
         self.connection.commit()
+        self._vector_dimension = self._stored_dimension()
+        if dimension is not None:
+            self._ensure_vector_table(dimension)
 
     def upsert(self, chunks: Iterable[TextChunk], embeddings: Iterable[list[float]]) -> int:
         rows = []
         for chunk, embedding in zip(chunks, embeddings, strict=True):
+            normalized = _normalize(embedding)
             rows.append(
                 (
                     chunk.chunk_id,
@@ -46,7 +58,7 @@ class SQLiteIndex:
                     chunk.page,
                     chunk.section,
                     chunk.chunk_index,
-                    json.dumps(embedding),
+                    json.dumps(normalized),
                 )
             )
         self.connection.executemany(
@@ -59,6 +71,15 @@ class SQLiteIndex:
             rows,
         )
         self.connection.commit()
+        if rows:
+            self._ensure_vector_table(len(json.loads(rows[0][-1])))
+            for row in rows:
+                self.connection.execute("DELETE FROM vec_chunks WHERE chunk_id = ?", (row[0],))
+                self.connection.execute(
+                    "INSERT INTO vec_chunks(embedding, chunk_id) VALUES (?, ?)",
+                    (sqlite_vec.serialize_float32(json.loads(row[-1])), row[0]),
+                )
+            self.connection.commit()
         return len(rows)
 
     def search(
@@ -70,8 +91,29 @@ class SQLiteIndex:
     ) -> list[CitationSource]:
         if not 0.0 <= semantic_weight <= 1.0:
             raise ValueError("semantic_weight must be between 0 and 1")
+        if self._vector_dimension is None:
+            row = self.connection.execute("SELECT embedding FROM chunks LIMIT 1").fetchone()
+            if row is None:
+                return []
+            self._ensure_vector_table(len(json.loads(row[0])))
+            self._backfill_vectors()
+        candidate_limit = max(limit * 8, 50)
+        vector_rows = self.connection.execute(
+            """SELECT chunk_id, distance FROM vec_chunks
+            WHERE embedding MATCH ? AND k = ? ORDER BY distance""",
+            (sqlite_vec.serialize_float32(_normalize(embedding)), candidate_limit),
+        ).fetchall()
+        if not vector_rows:
+            return []
+        placeholders = ",".join("?" for _ in vector_rows)
+        rows = self.connection.execute(
+            f"SELECT * FROM chunks WHERE chunk_id IN ({placeholders})",
+            [row[0] for row in vector_rows],
+        ).fetchall()
+        by_chunk_id = {row[0]: row for row in rows}
         scored: list[CitationSource] = []
-        for row in self.connection.execute("SELECT * FROM chunks"):
+        for chunk_id, _distance in vector_rows:
+            row = by_chunk_id[chunk_id]
             source_embedding = json.loads(row[11])
             semantic_score = _cosine(embedding, source_embedding)
             lexical_score = _lexical_overlap(query_text, row[7]) if query_text else 0.0
@@ -107,6 +149,41 @@ class SQLiteIndex:
             (attachment_key, source_version, _file_hash(path)),
         )
         self.connection.commit()
+
+    def _stored_dimension(self) -> int | None:
+        row = self.connection.execute("SELECT dimension FROM vector_meta LIMIT 1").fetchone()
+        return row[0] if row else None
+
+    def _ensure_vector_table(self, dimension: int) -> None:
+        if dimension <= 0:
+            raise ValueError("Embedding dimension must be positive")
+        if self._vector_dimension is not None and self._vector_dimension != dimension:
+            raise ValueError(
+                f"Embedding dimension {dimension} does not match index dimension "
+                f"{self._vector_dimension}"
+            )
+        if self._vector_dimension is None:
+            self.connection.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks "
+                f"USING vec0(embedding float[{dimension}], +chunk_id text)"
+            )
+            self.connection.execute("INSERT INTO vector_meta(dimension) VALUES (?)", (dimension,))
+            self.connection.commit()
+            self._vector_dimension = dimension
+
+    def _backfill_vectors(self) -> None:
+        rows = self.connection.execute("SELECT chunk_id, embedding FROM chunks").fetchall()
+        for chunk_id, embedding in rows:
+            self.connection.execute(
+                "INSERT INTO vec_chunks(embedding, chunk_id) VALUES (?, ?)",
+                (sqlite_vec.serialize_float32(_normalize(json.loads(embedding))), chunk_id),
+            )
+        self.connection.commit()
+
+
+def _normalize(vector: list[float]) -> list[float]:
+    norm = math.sqrt(sum(value * value for value in vector))
+    return [value / norm for value in vector] if norm else vector
 
 
 def _cosine(left: list[float], right: list[float]) -> float:

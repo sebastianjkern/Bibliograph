@@ -1,3 +1,6 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 from bibliograph.chunking import chunk_pages, split_text
 from bibliograph.embeddings import HashEmbedder, OpenAICompatibleEmbedder
 from bibliograph.models import Paper
@@ -48,3 +51,20 @@ def test_openai_compatible_embedder_sorts_results_and_tracks_dimension():
 
     assert vectors == [[1.0, 0.0], [0.0, 1.0]]
     assert embedder.dimension == 2
+
+
+def test_sqlite_vec_index_persists_across_reopen():
+    paper = Paper("PERSIST", "Persistent Paper")
+    chunk = chunk_pages(paper, [(2, "persistent vector evidence")], max_words=20, overlap_words=2)
+    embedder = HashEmbedder()
+    with TemporaryDirectory(dir=".") as directory:
+        path = Path(directory) / "index.db"
+        index = SQLiteIndex(path)
+        index.upsert(chunk, embedder.embed([item.text for item in chunk]))
+        index.close()
+
+        reopened = SQLiteIndex(path)
+        result = reopened.search(embedder.embed(["vector evidence"])[0], limit=1)
+        reopened.close()
+
+    assert result[0].chunk.paper.zotero_key == "PERSIST"
