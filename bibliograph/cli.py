@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from rich.console import Console
+from rich.markdown import Markdown
 
 from .config import DEFAULT_LLM_MODEL, EMBEDDING_CONTENT_VERSION, openai_settings
 from .drafts import parse_draft_file
@@ -154,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     args = build_parser().parse_args(argv)
     configure_logging(args.log_level, args.quiet)
+    console = Console()
     logger = get_logger("cli")
     logger.info("Command: %s", args.command)
     if args.command == "download-pdf":
@@ -190,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         status = "Downloaded" if result.downloaded else "Already present"
         logger.info("%s PDF: %s", status, result.path)
-        print(f"{status}: {result.path}")
+        console.print(f"[green]{status}[/green]: {result.path}")
         return 0
 
     logger.info("Loading %s embedding backend", args.embedding_provider)
@@ -242,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.output.write_text(output, encoding="utf-8")
                 logger.info("Wrote report: %s", args.output)
             else:
-                print(output)
+                console.print(Markdown(output))
             return 0
 
         if args.command == "check":
@@ -368,7 +371,7 @@ def main(argv: list[str] | None = None) -> int:
                 logger.info("Wrote report: %s", args.output)
             else:
                 logger.info("Writing report to console")
-                print(output)
+                console.print(Markdown(output))
             return 0
 
         logger.info("Retrieving citations from draft: %s", args.draft)
@@ -398,7 +401,7 @@ def main(argv: list[str] | None = None) -> int:
             logger.info("Wrote report: %s", args.output)
         else:
             logger.info("Writing report to console")
-            print(output)
+            console.print(Markdown(output))
         return 0
     finally:
         index.close()

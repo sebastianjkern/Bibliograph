@@ -1,5 +1,6 @@
 import logging
-import sys
+
+from rich.logging import RichHandler
 
 LOGGER_NAME = "bibliograph"
 
@@ -11,8 +12,12 @@ def configure_logging(level: str = "INFO", quiet: bool = False) -> None:
     logger.propagate = False
     if quiet:
         return
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    handler = RichHandler(
+        show_path=False,
+        show_time=False,
+        rich_tracebacks=True,
+        markup=False,
+    )
     logger.addHandler(handler)
 
 

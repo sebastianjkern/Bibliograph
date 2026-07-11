@@ -173,6 +173,7 @@ Changing the embedding model or structured PDF-processing version automatically 
 - SentenceTransformer, deterministic hash, and OpenAI-compatible embeddings.
 - Persistent SQLite/sqlite-vec vector search.
 - LLM-assisted reranking with a deterministic fallback.
+- Rich-colored progress logs and formatted console reports.
 - LaTeX, Typst, and plain-text draft search.
 
 ## Code structure
