@@ -38,7 +38,7 @@ class OpenAISuggestionGenerator:
         from openai import OpenAI
 
         kwargs = {
-            "api_key": api_key,
+            "api_key": api_key or DEFAULT_OPENAI_API_KEY,
             "base_url": base_url or DEFAULT_OPENAI_BASE_URL,
         }
         self.client = OpenAI(**kwargs)

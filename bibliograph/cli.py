@@ -2,7 +2,9 @@ import argparse
 import os
 from pathlib import Path
 
-from .config import DEFAULT_LLM_MODEL
+from dotenv import load_dotenv
+
+from .config import DEFAULT_LLM_MODEL, openai_settings
 from .drafts import parse_draft_file
 from .embeddings import HashEmbedder, OpenAICompatibleEmbedder, SentenceTransformerEmbedder
 from .export import to_markdown
@@ -137,6 +139,7 @@ def _embedder(
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_dotenv()
     args = build_parser().parse_args(argv)
     configure_logging(args.log_level, args.quiet)
     logger = get_logger("cli")
@@ -291,12 +294,13 @@ def main(argv: list[str] | None = None) -> int:
             if not args.no_rerank:
                 logger.info("Reranking evidence with LLM model: %s", args.llm_model)
                 try:
+                    api_key, base_url = openai_settings()
                     matches = rerank_matches(
                         matches,
                         OpenAIReranker(
                             args.llm_model,
-                            os.getenv("OPENAI_API_KEY", "lm-studio"),
-                            os.getenv("OPENAI_BASE_URL"),
+                            api_key,
+                            base_url,
                         ),
                     )
                 except Exception as error:
@@ -335,10 +339,11 @@ def main(argv: list[str] | None = None) -> int:
         generator = None
         if not args.no_llm:
             try:
+                api_key, base_url = openai_settings()
                 generator = OpenAISuggestionGenerator(
                     args.llm_model,
-                    os.getenv("OPENAI_API_KEY", "lm-studio"),
-                    os.getenv("OPENAI_BASE_URL"),
+                    api_key,
+                    base_url,
                 )
             except Exception as error:
                 logger.warning(

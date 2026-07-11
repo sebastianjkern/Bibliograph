@@ -1,3 +1,4 @@
+from bibliograph.config import openai_settings
 from bibliograph.models import CitationSource, DraftMatch, Paper, TextChunk
 from bibliograph.reranker import OpenAIReranker, rerank_matches
 
@@ -32,3 +33,10 @@ def test_llm_reranker_orders_candidates_and_clamps_scores():
 
     assert result.sources[0].chunk.text == "strong evidence"
     assert result.sources[0].score == 0.95
+
+
+def test_openai_settings_fall_back_when_api_key_is_empty(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("OPENAI_BASE_URL", "")
+
+    assert openai_settings() == ("lm-studio", "http://localhost:1234/v1")

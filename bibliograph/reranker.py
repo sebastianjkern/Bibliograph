@@ -28,6 +28,7 @@ class OpenAIReranker:
         base_url: str | None = None,
         client=None,
     ):
+        api_key = api_key or DEFAULT_OPENAI_API_KEY
         if client is None:
             try:
                 from openai import OpenAI
