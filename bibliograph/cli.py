@@ -112,6 +112,11 @@ def build_parser() -> argparse.ArgumentParser:
     find_sources.add_argument("--output", type=Path)
     find_sources.add_argument("--llm-model", default=DEFAULT_LLM_MODEL)
     find_sources.add_argument("--no-rerank", action="store_true")
+    find_sources.add_argument(
+        "--no-evidence-extraction",
+        action="store_true",
+        help="Keep retrieved chunks instead of selecting exact evidence with the LLM",
+    )
 
     check = subparsers.add_parser(
         "check", help="Sync one Zotero collection and check a Typst/LaTeX draft"
@@ -254,7 +259,25 @@ def main(argv: list[str] | None = None) -> int:
                 except Exception as error:
                     logger.warning("LLM reranking unavailable; using retrieval order: %s", error)
                     matches = rerank_matches(matches, HeuristicReranker())
-            output = sources_to_markdown(matches)
+            evidence_extractor = None
+            if not args.no_evidence_extraction:
+                logger.info("Selecting exact supporting passages with the LLM")
+                try:
+                    api_key, base_url = openai_settings()
+                    evidence_extractor = OpenAIEvidenceExtractor(
+                        args.llm_model,
+                        api_key,
+                        base_url,
+                    )
+                except Exception as error:
+                    logger.warning(
+                        "Evidence extraction unavailable; using retrieved chunks: %s", error
+                    )
+            output = sources_to_markdown(
+                matches,
+                evidence_extractor=evidence_extractor,
+                context_provider=index.context_for,
+            )
             if args.output:
                 args.output.write_text(output, encoding="utf-8")
                 logger.info("Wrote report: %s", args.output)

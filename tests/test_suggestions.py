@@ -1,4 +1,4 @@
-from bibliograph.export import to_markdown
+from bibliograph.export import sources_to_markdown, to_markdown
 from bibliograph.models import CitationSource, DraftMatch, Paper, TextChunk
 from bibliograph.suggestions import (
     EvidenceSelection,
@@ -96,3 +96,18 @@ def test_evidence_extractor_sends_claim_source_and_context():
     user_message = calls[0]["messages"][1]["content"]
     assert "The draft claim." in user_message
     assert "Nearby context." in user_message
+
+
+def test_sources_markdown_uses_selected_evidence():
+    class Extractor:
+        def extract(self, draft_text, source, context):
+            return EvidenceSelection(True, "Exact supporting sentence.", "")
+
+    markdown = sources_to_markdown(
+        [_match()],
+        evidence_extractor=Extractor(),
+        context_provider=lambda chunk: "Before. Exact supporting sentence. After.",
+    )
+
+    assert "Evidence: Exact supporting sentence." in markdown
+    assert "Evidence: Evidence from page three" not in markdown

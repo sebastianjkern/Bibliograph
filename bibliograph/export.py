@@ -1,7 +1,10 @@
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
-from .models import DraftMatch
-from .suggestions import CitationSuggestion
+from .logging_utils import get_logger
+from .models import DraftMatch, TextChunk
+from .suggestions import CitationSuggestion, EvidenceExtractor
+
+logger = get_logger("export")
 
 
 def to_markdown(suggestions: Iterable[CitationSuggestion]) -> str:
@@ -42,7 +45,11 @@ def _blockquote(text: str) -> list[str]:
     return [f"> {line}" for line in text.splitlines()] or ["> "]
 
 
-def sources_to_markdown(matches: Iterable[DraftMatch]) -> str:
+def sources_to_markdown(
+    matches: Iterable[DraftMatch],
+    evidence_extractor: EvidenceExtractor | None = None,
+    context_provider: Callable[[TextChunk], str] | None = None,
+) -> str:
     """Format every retrieved source for a single-claim lookup."""
     matches = list(matches)
     claim = matches[0].draft_text if matches else ""
@@ -50,13 +57,26 @@ def sources_to_markdown(matches: Iterable[DraftMatch]) -> str:
     for match in matches:
         for index, source in enumerate(match.sources, start=1):
             paper = source.chunk.paper
+            evidence = source.chunk.text
+            if evidence_extractor is not None and context_provider is not None:
+                try:
+                    context = context_provider(source.chunk)
+                    selection = evidence_extractor.extract(match.draft_text, source, context)
+                    if selection.supports_claim and selection.quote in context:
+                        evidence = selection.quote
+                except Exception as error:
+                    logger.warning(
+                        "Evidence extraction failed for %s; using the retrieved chunk: %s",
+                        paper.title,
+                        error,
+                    )
             lines.extend(
                 [
                     f"## {index}. {paper.citation_label}",
                     f"Support score: {source.score:.2f}",
                     f"DOI: {paper.doi or 'unknown'}",
                     f"Page: {source.chunk.page or 'unknown'}",
-                    f"> Evidence: {source.chunk.text}",
+                    f"> Evidence: {evidence}",
                     "",
                 ]
             )
