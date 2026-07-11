@@ -16,7 +16,7 @@ This repository is an early-stage prototype rather than a finished product. It c
 ## What the project solves today
 
 * Collects Zotero items and collection metadata from a configured Zotero library.
-* Downloads one missing PDF attachment at a time from Zotero by DOI, title, or item key.
+* Downloads one missing PDF at a time from Zotero or legal remote open-access sources.
 * Extracts text from local PDF files and splits it into searchable sentences.
 * Stores page-aware chunk embeddings and complete citation metadata in a persistent SQLite index using sqlite-vec nearest-neighbor search.
 * Supports deterministic local vectors, SentenceTransformer models, and OpenAI-compatible embedding APIs.
@@ -137,6 +137,14 @@ uv run bibliograph download-pdf --title "Paper title" --output-dir pdfs
 
 The command resolves the Zotero parent item internally, finds its PDF attachment, and skips the download if that attachment is already local. If multiple papers match a title, use the DOI or the optional parent item key. If one item has multiple PDFs, select one with `--attachment-key`.
 
+To download from a remote legal open-access source instead of a Zotero attachment, use Unpaywall with a DOI:
+
+```bash
+uv run bibliograph download-pdf --source remote --doi 10.1234/example --output-dir pdfs
+```
+
+Set `UNPAYWALL_EMAIL` in `.env`. The remote backend uses Unpaywall’s listed open-access PDF locations and refuses responses that are not PDFs. It does not bypass publisher paywalls.
+
 ### Run the complete citation check
 
 Run the end-to-end workflow:
@@ -158,11 +166,19 @@ The command:
 
 It does not download PDFs. Use the single-item command above for each missing paper, then rerun `check`.
 
-To let `check` download missing attachments through the same single-item Zotero backend, opt in explicitly:
+To let `check` download missing papers through the Zotero attachment backend, opt in explicitly:
 
 ```bash
 uv run bibliograph check example.tex "My Collection" --pdf-dir pdfs --download-missing
 ```
+
+To use remote open-access downloads instead:
+
+```bash
+uv run bibliograph check example.tex "My Collection" --pdf-dir pdfs --download-missing --download-source remote
+```
+
+Remote downloads require a DOI and `UNPAYWALL_EMAIL`. Zotero still supplies the collection metadata and paper title; the PDF bytes come from the remote open-access location.
 
 Missing-paper names, DOIs, and available attachment keys are printed in the report. Papers without an available attachment key are still listed by title and DOI; the backend resolves them through the parent Zotero item when possible.
 

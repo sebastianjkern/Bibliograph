@@ -1,3 +1,4 @@
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,6 +47,17 @@ def sync_collection(
             continue
         attachments = _pdf_attachments(zotero, item_key)
         if not attachments:
+            local_path = _find_local_pdf(pdf_dir, "", item_key, item_data.get("DOI"))
+            if local_path is not None:
+                version = item_data.get("version")
+                if index.needs_file_index(item_key, version, str(local_path)):
+                    paper = paper_from_zotero_item(item, [collection_key])
+                    indexer(index, embedder, paper, local_path)
+                    index.mark_file_indexed(item_key, version, str(local_path))
+                    report.indexed.append(item_key)
+                else:
+                    report.unchanged.append(item_key)
+                continue
             report.missing_papers.append(
                 MissingPaper(item_key, item_data.get("title", "Untitled"), item_data.get("DOI"))
             )
@@ -57,7 +69,7 @@ def sync_collection(
             if not attachment_key:
                 missing_keys.append("")
                 continue
-            local_path = _find_local_pdf(pdf_dir, attachment_key)
+            local_path = _find_local_pdf(pdf_dir, attachment_key, item_key, item_data.get("DOI"))
             if local_path is None:
                 report.missing_local_pdf.append(attachment_key)
                 missing_keys.append(attachment_key)
@@ -91,10 +103,21 @@ def _pdf_attachments(zotero: Any, parent_key: str) -> list[dict]:
     ]
 
 
-def _find_local_pdf(pdf_dir: str | Path, attachment_key: str) -> Path | None:
+def _find_local_pdf(
+    pdf_dir: str | Path,
+    attachment_key: str,
+    parent_key: str | None = None,
+    doi: str | None = None,
+) -> Path | None:
     directory = Path(pdf_dir)
-    exact = directory / f"{attachment_key}.pdf"
-    if exact.is_file():
-        return exact
-    matches = sorted(directory.glob(f"*-{attachment_key}.pdf"))
-    return matches[0] if matches else None
+    keys = [key for key in (attachment_key, parent_key) if key]
+    if doi:
+        keys.append(re.sub(r"[^A-Za-z0-9_-]+", "_", doi.lower()).strip("_"))
+    for key in keys:
+        exact = directory / f"{key}.pdf"
+        if exact.is_file():
+            return exact
+        matches = sorted(directory.glob(f"*-{key}.pdf"))
+        if matches:
+            return matches[0]
+    return None

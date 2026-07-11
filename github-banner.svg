@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Bibliograph — organize, cite, discover</title>
+  <desc id="desc">A dark indigo GitHub banner with a stylized open book, citation marks, and the Bibliograph wordmark.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="0.58" stop-color="#18233d"/>
+      <stop offset="1" stop-color="#312e81"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#818cf8" stop-opacity=".38"/>
+      <stop offset="1" stop-color="#a5b4fc" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#c7d2fe"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#020617" flood-opacity=".42"/>
+    </filter>
+    <pattern id="grid" width="44" height="44" patternUnits="userSpaceOnUse">
+      <path d="M44 0H0V44" fill="none" stroke="#c7d2fe" stroke-opacity=".065"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="640" rx="28" fill="url(#bg)"/>
+  <circle cx="1080" cy="72" r="310" fill="url(#glow)"/>
+  <rect x="28" y="28" width="1224" height="584" rx="20" fill="url(#grid)"/>
+
+  <!-- quiet citation constellation -->
+  <g fill="none" stroke="#a5b4fc" stroke-opacity=".35" stroke-width="2">
+    <path d="M886 142L1015 104L1132 178L1181 302L1088 407L951 376L886 142Z"/>
+    <path d="M1015 104L1088 407M1132 178L951 376M886 142L1181 302"/>
+  </g>
+  <g fill="#c7d2fe">
+    <circle cx="886" cy="142" r="5"/><circle cx="1015" cy="104" r="5"/><circle cx="1132" cy="178" r="5"/>
+    <circle cx="1181" cy="302" r="5"/><circle cx="1088" cy="407" r="5"/><circle cx="951" cy="376" r="5"/>
+  </g>
+
+  <!-- open book mark -->
+  <g filter="url(#shadow)" transform="translate(804 164)">
+    <path d="M0 62C58 25 121 28 178 66V306C119 270 59 270 0 305Z" fill="url(#paper)"/>
+    <path d="M178 66C235 28 298 25 356 62V305C297 270 237 270 178 306Z" fill="#e0e7ff"/>
+    <path d="M178 66V306" stroke="#6366f1" stroke-width="7" stroke-linecap="round"/>
+    <path d="M37 105C79 84 117 86 151 104M37 139C79 118 117 120 151 138M37 173C79 152 117 154 151 172M205 104C239 86 277 84 319 105M205 138C239 120 277 118 319 139M205 172C239 154 277 152 319 173" fill="none" stroke="#6366f1" stroke-opacity=".52" stroke-width="8" stroke-linecap="round"/>
+    <path d="M288 70V151L311 132L334 151V58" fill="#818cf8"/>
+  </g>
+
+  <g transform="translate(112 162)">
+    <text x="0" y="30" fill="#a5b4fc" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="700" letter-spacing="5">OPEN YOUR SOURCES</text>
+    <text x="0" y="138" fill="#f8fafc" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="90" font-weight="750" letter-spacing="-4">Bibliograph</text>
+    <rect x="2" y="177" width="90" height="6" rx="3" fill="#818cf8"/>
+    <text x="0" y="243" fill="#c7d2fe" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="31" font-weight="500">Organize. Cite. Discover.</text>
+    <text x="0" y="307" fill="#94a3b8" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="20">A calm place for the ideas that move your work forward.</text>
+  </g>
+
+  <g transform="translate(112 521)" fill="#94a3b8" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="16" letter-spacing="2">
+    <text>READ DEEPLY</text><circle cx="145" cy="-6" r="3" fill="#818cf8"/><text x="165">THINK CLEARLY</text><circle cx="332" cy="-6" r="3" fill="#818cf8"/><text x="352">BUILD KNOWLEDGE</text>
+  </g>
+</svg>

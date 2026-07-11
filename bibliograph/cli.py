@@ -50,6 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
         "download-pdf", help="Download one missing PDF attachment from Zotero"
     )
     download.add_argument(
+        "--source", choices=("zotero", "remote"), default="zotero",
+        help="PDF source (default: zotero)",
+    )
+    download.add_argument(
         "item_key", nargs="?", help="Optional Zotero parent item or attachment key"
     )
     identifier = download.add_mutually_exclusive_group()
@@ -78,7 +82,13 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument(
         "--download-missing",
         action="store_true",
-        help="Download missing PDFs through the single-item Zotero backend",
+        help="Download missing PDFs through the selected backend",
+    )
+    check.add_argument(
+        "--download-source",
+        choices=("zotero", "remote"),
+        default="zotero",
+        help="Source used with --download-missing",
     )
     return parser
 
@@ -100,15 +110,27 @@ def _embedder(
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "download-pdf":
-        from connections.reload_embeddings import download_pdf_for_item
+        if args.source == "remote":
+            if not args.doi:
+                raise ValueError("Remote downloads require --doi")
+            from .remote import download_unpaywall_pdf
 
-        result = download_pdf_for_item(
-            args.item_key,
-            str(args.output_dir),
-            args.attachment_key,
-            args.doi,
-            args.title,
-        )
+            result = download_unpaywall_pdf(
+                args.doi,
+                args.output_dir,
+                title=args.title,
+                item_key=args.item_key,
+            )
+        else:
+            from connections.reload_embeddings import download_pdf_for_item
+
+            result = download_pdf_for_item(
+                args.item_key,
+                str(args.output_dir),
+                args.attachment_key,
+                args.doi,
+                args.title,
+            )
         status = "Downloaded" if result.downloaded else "Already present"
         print(f"{status}: {result.path}")
         return 0
@@ -140,14 +162,28 @@ def main(argv: list[str] | None = None) -> int:
             if args.download_missing:
                 from connections.reload_embeddings import download_pdf_for_item
 
+                from .remote import download_unpaywall_pdf
+
                 for missing in report.missing_papers:
                     try:
-                        result = download_pdf_for_item(
-                            missing.item_key,
-                            str(args.pdf_dir),
-                            missing.attachment_keys[0] if missing.attachment_keys else None,
-                        )
-                    except ValueError:
+                        if args.download_source == "remote":
+                            if not missing.doi:
+                                continue
+                            result = download_unpaywall_pdf(
+                                missing.doi,
+                                args.pdf_dir,
+                                title=missing.title,
+                                item_key=missing.item_key,
+                            )
+                        else:
+                            result = download_pdf_for_item(
+                                missing.item_key,
+                                str(args.pdf_dir),
+                                missing.attachment_keys[0]
+                                if missing.attachment_keys
+                                else None,
+                            )
+                    except (FileNotFoundError, ValueError):
                         continue
                     downloaded.append(result.path)
                 if downloaded:
