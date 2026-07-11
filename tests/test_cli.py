@@ -22,7 +22,7 @@ def test_cli_accepts_direct_local_source_lookup():
     assert args.command == "find-sources"
     assert args.claim == "causal effects of roads"
     assert args.limit == 3
-    assert args.llm_model == "qwen/qwen3-1.7b"
+    assert args.llm_model == "essentialai/rnj-1"
     assert args.no_rerank is False
 
 
@@ -31,7 +31,7 @@ def test_cli_has_local_first_defaults():
     assert args.embedding_provider == "sentence-transformers"
     assert args.download_missing is True
     assert args.download_source == "remote"
-    assert args.llm_model == "qwen/qwen3-1.7b"
+    assert args.llm_model == "essentialai/rnj-1"
     assert args.output is None
 
 

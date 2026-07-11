@@ -98,7 +98,7 @@ After configuring Zotero and creating `example.tex`, run the complete workflow w
 uv run bibliograph check example.tex "My Collection"
 ```
 
-This uses the cached SentenceTransformer embedding model, the `pdfs` directory, the persistent `bibliograph.db` index, local Zotero PDFs before remote downloads for missing DOI papers, LLM reranking with `qwen/qwen3-1.7b` when available, and prints the report to the console. Add `--output citation-check.md` when you want to save the report.
+This uses the cached SentenceTransformer embedding model, the `pdfs` directory, the persistent `bibliograph.db` index, local Zotero PDFs before remote downloads for missing DOI papers, LLM reranking with `essentialai/rnj-1` when available, and prints the report to the console. Add `--output citation-check.md` when you want to save the report.
 
 The index records the selected embedding backend and model. If you change models later, Bibliograph clears the incompatible vectors and reindexes the available PDFs automatically.
 
@@ -117,12 +117,12 @@ uv run bibliograph find-sources "Road infrastructure improves regional market ac
 
 The command reranks the retrieved sources with the configured LLM by default. Add `--no-rerank` for deterministic retrieval order, or `--output sources.md` to save the ranked evidence.
 
-For a fully local setup with LM Studio, start its local server, load `qwen/qwen3-1.7b` and `text-embedding-nomic-embed-text-v1.5`, then run:
+For a fully local setup with LM Studio, start its local server, load `essentialai/rnj-1` and `text-embedding-nomic-embed-text-v1.5`, then run:
 
 ```bash
 uv run bibliograph --embedding-provider openai \
   --model text-embedding-nomic-embed-text-v1.5 \
-  check example.tex "My Collection" --llm-model qwen/qwen3-1.7b
+  check example.tex "My Collection" --llm-model essentialai/rnj-1
 ```
 
 The default LM Studio endpoint is `http://localhost:1234/v1`; set `OPENAI_BASE_URL` if the server uses another URL. The default API key value is `lm-studio`, so no real OpenAI key is needed for this local setup.
