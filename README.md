@@ -173,6 +173,14 @@ uv run bibliograph download-pdf --source remote --doi 10.1234/example --output-d
 
 Remote downloads use `doidownloader`. It checks the DOI's publisher route, publisher metadata, known publisher PDF routes, and legally available open-access locations. This can use publisher access provided by your university network, but it does not bypass authentication or paywalls. Bibliograph requires Python 3.12 or newer because `doidownloader` is part of the main installation.
 
+When a publisher page needs browser-based access, Bibliograph falls back to Playwright. Install its Chromium browser once:
+
+```bash
+uv run playwright install chromium
+```
+
+For institutional login cookies, set `BIBLIOGRAPH_PLAYWRIGHT_PROFILE` to a dedicated browser profile directory. Set `BIBLIOGRAPH_PLAYWRIGHT_HEADLESS=false` when an interactive login is needed. The fallback only follows HTTPS links discovered on DOI-resolved publisher pages and accepts responses with a PDF signature.
+
 If your default `uv` environment uses Python 3.11 or older, create the downloader environment explicitly:
 
 ```bash

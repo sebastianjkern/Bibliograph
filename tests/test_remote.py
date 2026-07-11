@@ -136,6 +136,10 @@ def test_remote_download_exposes_manual_pydoi_hints(monkeypatch):
         "bibliograph.remote._retrieve_with_doidownloader",
         lambda doi, email: (_ for _ in ()).throw(FileNotFoundError("not found")),
     )
+    monkeypatch.setattr(
+        "bibliograph.remote._retrieve_with_playwright",
+        lambda doi: (_ for _ in ()).throw(FileNotFoundError("browser not found")),
+    )
     hint = SimpleNamespace(
         url="https://publisher.example/article",
         source="pydoi",
@@ -148,6 +152,25 @@ def test_remote_download_exposes_manual_pydoi_hints(monkeypatch):
             download_remote_pdf("10/example", directory)
 
     assert error.value.hints == (hint,)
+
+
+def test_browser_pdf_candidates_prioritize_pdf_links():
+    from bibliograph.remote import _browser_pdf_candidates
+
+    candidates = _browser_pdf_candidates(
+        "https://publisher.example/article/1",
+        [
+            {"href": "/article/1", "text": "Article"},
+            {"href": "/article/1/download", "text": "Download PDF"},
+            {"href": "/article/1/supplement.pdf", "text": "Supplement"},
+            {"href": "http://publisher.example/article/1.pdf", "text": "PDF"},
+        ],
+    )
+
+    assert candidates[:2] == [
+        "https://publisher.example/article/1/download",
+        "https://publisher.example/article/1/supplement.pdf",
+    ]
 
 
 def test_pydoi_resolver_returns_https_manual_landing_pages(monkeypatch):

@@ -6,7 +6,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from .logging_utils import get_logger
@@ -157,13 +157,23 @@ def download_remote_pdf(
             content, source_url = _retrieve_with_doidownloader(doi, email)
         except (ImportError, OSError, ValueError) as error:
             logger.warning("DOIDownloader could not retrieve %s: %s", doi, error)
-            hints = PyDOIResolver().manual_hints(doi)
-            raise RemoteDownloadError(
-                doi,
-                hints,
-                f"No PDF downloaded for {doi}: {error}. "
-                "Open one of the manual download hints.",
-            ) from error
+            try:
+                content, source_url = _retrieve_with_playwright(doi)
+            except (ImportError, OSError, ValueError) as browser_error:
+                logger.warning("Playwright could not retrieve %s: %s", doi, browser_error)
+                hints = PyDOIResolver().manual_hints(doi)
+                raise RemoteDownloadError(
+                    doi,
+                    hints,
+                    f"No PDF downloaded for {doi}: {error}; "
+                    f"Playwright fallback: {browser_error}. "
+                    "Open one of the manual download hints.",
+                ) from browser_error
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+            filepath.write_bytes(content)
+            return RemoteDownloadResult(
+                str(filepath), True, source_url, "playwright", "Accessible publisher page"
+            )
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_bytes(content)
         return RemoteDownloadResult(
@@ -300,6 +310,102 @@ def _retrieve_with_doidownloader(doi: str, email: str | None) -> tuple[bytes, st
         return result[3], str(result[0])
 
     return asyncio.run(retrieve())
+
+
+def _retrieve_with_playwright(doi: str) -> tuple[bytes, str]:
+    """Retrieve a PDF from a DOI-resolved publisher page using a browser session."""
+    try:
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+        from playwright.async_api import async_playwright
+    except ModuleNotFoundError as error:
+        raise ImportError(
+            "Playwright is not installed or its browser support is unavailable. "
+            "Run 'uv run playwright install chromium'."
+        ) from error
+
+    async def retrieve() -> tuple[bytes, str]:
+        profile = os.getenv("BIBLIOGRAPH_PLAYWRIGHT_PROFILE")
+        headless = os.getenv("BIBLIOGRAPH_PLAYWRIGHT_HEADLESS", "true").casefold() not in {
+            "0",
+            "false",
+            "no",
+        }
+        landing_urls = [candidate.url for candidate in PyDOIResolver().resolve(doi)]
+        if not landing_urls:
+            landing_urls = [f"https://doi.org/{_normalize_doi(doi)}"]
+
+        async with async_playwright() as playwright:
+            browser = None
+            if profile:
+                context = await playwright.chromium.launch_persistent_context(
+                    profile, headless=headless
+                )
+            else:
+                browser = await playwright.chromium.launch(headless=headless)
+                context = await browser.new_context()
+            try:
+                for landing_url in landing_urls:
+                    page = await context.new_page()
+                    try:
+                        response = await page.goto(
+                            landing_url,
+                            wait_until="domcontentloaded",
+                            timeout=60_000,
+                        )
+                        if response is not None:
+                            content = await response.body()
+                            if content.startswith(b"%PDF-"):
+                                return content, page.url
+                        links = await page.locator(
+                            "a[href], link[href], meta[name='citation_pdf_url']"
+                        ).evaluate_all(
+                            """elements => elements.map(element => ({
+                                href: element.href || element.content || '',
+                                text: element.innerText || element.getAttribute('aria-label') || ''
+                            }))"""
+                        )
+                        for pdf_url in _browser_pdf_candidates(page.url, links):
+                            try:
+                                pdf_response = await context.request.get(
+                                    pdf_url, timeout=60_000
+                                )
+                                content = await pdf_response.body()
+                            except (OSError, PlaywrightTimeoutError):
+                                continue
+                            if content.startswith(b"%PDF-"):
+                                return content, pdf_url
+                    except PlaywrightTimeoutError:
+                        logger.debug("Browser navigation timed out: %s", landing_url)
+                    finally:
+                        await page.close()
+            finally:
+                await context.close()
+                if browser is not None:
+                    await browser.close()
+        raise FileNotFoundError(f"Playwright found no PDF links for {doi}")
+
+    return asyncio.run(retrieve())
+
+
+def _browser_pdf_candidates(base_url: str, links: Sequence[dict[str, str]]) -> list[str]:
+    """Rank HTTPS PDF/download links discovered on a publisher page."""
+    candidates: list[tuple[int, str]] = []
+    for link in links:
+        href = urljoin(base_url, link.get("href", "").strip())
+        parsed = urlparse(href)
+        if parsed.scheme != "https":
+            continue
+        value = f"{href} {link.get('text', '')}".casefold()
+        score = 0
+        if ".pdf" in value or "/pdf" in value or " pdf" in value or value.endswith("pdf"):
+            score += 5
+        if "download" in value:
+            score += 2
+        if "full text" in value or value.rstrip().endswith(" pdf"):
+            score += 1
+        if score:
+            candidates.append((score, href))
+    return [url for _score, url in sorted(set(candidates), reverse=True)]
 
 
 def _validate_candidate(candidate: RemoteCandidate) -> None:

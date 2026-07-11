@@ -18,6 +18,7 @@ dependencies = [
     "openai>=1.40",
     "sentence-transformers>=3.0",
     "streamlit>=1.36",
+    "playwright>=1.50",
     "pytest>=8.0",
     "ruff>=0.6",
 ]
