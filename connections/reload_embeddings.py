@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from bibliograph.zotero_sync import is_pdf_file
+from bibliograph.zotero_sync import is_pdf_attachment, is_pdf_file
 
 
 @dataclass(frozen=True)
@@ -67,16 +67,13 @@ def find_pdf_attachment_ids(zot: Any, item_key: str, item_type: str) -> list[str
     if item_type == "attachment":
         item = zot.item(item_key)
         data = item.get("data", {})
-        if data.get("contentType") == "application/pdf":
+        if is_pdf_attachment(data):
             pdf_keys.append(item_key)
         return pdf_keys
 
     for child in zot.children(item_key):
         child_data = child.get("data", {})
-        if (
-            child_data.get("itemType") == "attachment"
-            and child_data.get("contentType") == "application/pdf"
-        ):
+        if is_pdf_attachment(child_data):
             pdf_keys.append(child_data.get("key"))
 
     return pdf_keys

@@ -13,7 +13,7 @@ from .reranker import HeuristicReranker, OpenAIReranker, rerank_matches
 from .retrieval import find_citations, find_claim_citations
 from .store import SQLiteIndex
 from .suggestions import OpenAISuggestionGenerator, suggest_citations
-from .zotero_sync import MissingPaper, sync_collection
+from .zotero_sync import MissingPaper, is_remote_downloadable_item, sync_collection
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -220,6 +220,15 @@ def main(argv: list[str] | None = None) -> int:
                 from .remote import download_remote_pdf
 
                 for missing in report.missing_papers:
+                    if args.download_source == "remote" and not is_remote_downloadable_item(
+                        missing.item_type
+                    ):
+                        logger.info(
+                            "Skipping remote PDF download for Zotero item type %s: %s",
+                            missing.item_type,
+                            missing.title,
+                        )
+                        continue
                     try:
                         if args.download_source == "remote":
                             if not missing.doi:

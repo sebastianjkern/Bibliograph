@@ -218,6 +218,8 @@ uv run bibliograph check example.tex "My Collection" --pdf-dir pdfs --download-m
 
 Remote downloads require a DOI. Zotero still supplies the collection metadata and paper title; the PDF bytes come from the publisher or legal open-access route selected by `doidownloader`.
 
+Remote PDF downloads are limited to paper-like Zotero item types (`journalArticle`, `book`, `conferencePaper`, `report`, `thesis`, `preprint`, and related types). Datasets, webpages, software, media, and other non-paper records are reported but are not sent to a DOI-to-PDF downloader. Zotero PDF attachments are selected using the attachment's `contentType` metadata.
+
 Remote resolvers are extensible through the `RemoteResolver` protocol in `bibliograph.remote`. A publisher-specific integration can implement `resolve(doi)` and return `RemoteCandidate` objects containing an HTTPS URL and an explicit legal basis. Pass custom resolvers to `download_remote_pdf(..., resolvers=[...])`; do not add arbitrary scraping or paywall-bypass handlers.
 
 Missing-paper names, DOIs, and available attachment keys are printed in the report. Papers without an available attachment key are still listed by title and DOI; the backend resolves them through the parent Zotero item when possible.
@@ -289,7 +291,7 @@ from bibliograph.reranker import HeuristicReranker, OpenAIReranker, rerank_match
 from bibliograph.retrieval import find_claim_citations
 from bibliograph.store import SQLiteIndex
 from bibliograph.suggestions import suggest_citations
-from bibliograph.zotero_sync import sync_collection
+from bibliograph.zotero_sync import is_remote_downloadable_item, sync_collection
 from connections.reload_embeddings import find_collection_key, load_zotero_client
 
 
@@ -321,6 +323,9 @@ def main() -> None:
 
         if args.download_missing:
             for paper in report.missing_papers:
+                if not is_remote_downloadable_item(paper.item_type):
+                    print(f"Skipping non-paper Zotero item: {paper.title}")
+                    continue
                 if not paper.doi:
                     print(f"No DOI available for: {paper.title}")
                     continue

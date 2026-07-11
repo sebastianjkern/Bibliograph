@@ -2,6 +2,8 @@ import os
 
 from pyzotero import Zotero  # Import the Zotero file handling library 
 
+from bibliograph.zotero_sync import is_pdf_attachment
+
 
 def load_pdf_from_zotero(record_id: str) -> bytes:
     """
@@ -22,7 +24,7 @@ def get_pdf_attachment_id(zot, parent_id: str) -> str:
 
     for item in children:
         data = item.get("data", {})
-        if data.get("itemType") == "attachment" and data.get("contentType") == "application/pdf":
+        if is_pdf_attachment(data):
             return item.get("key")
 
     raise ValueError("No PDF attachment found.")

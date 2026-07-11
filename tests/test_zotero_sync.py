@@ -3,7 +3,7 @@ from tempfile import TemporaryDirectory
 
 from bibliograph.embeddings import HashEmbedder
 from bibliograph.store import SQLiteIndex
-from bibliograph.zotero_sync import sync_collection
+from bibliograph.zotero_sync import is_pdf_attachment, is_remote_downloadable_item, sync_collection
 
 
 class _Zotero:
@@ -64,3 +64,16 @@ def test_sync_treats_non_pdf_content_with_pdf_suffix_as_missing():
 
     assert report.indexed == []
     assert report.missing_local_pdf == ["A1"]
+
+
+def test_zotero_attachment_filter_uses_content_type():
+    assert is_pdf_attachment({"itemType": "attachment", "contentType": "application/pdf"})
+    assert not is_pdf_attachment(
+        {"itemType": "attachment", "contentType": "text/html", "filename": "page.pdf"}
+    )
+
+
+def test_remote_download_filter_excludes_non_paper_item_types():
+    assert is_remote_downloadable_item("journalArticle")
+    assert not is_remote_downloadable_item("dataset")
+    assert not is_remote_downloadable_item("webpage")

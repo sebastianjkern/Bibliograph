@@ -11,6 +11,22 @@ from .store import SQLiteIndex
 
 logger = get_logger("sync")
 
+PAPER_ITEM_TYPES = frozenset(
+    {
+        "book",
+        "bookSection",
+        "conferencePaper",
+        "encyclopediaArticle",
+        "journalArticle",
+        "magazineArticle",
+        "manuscript",
+        "newspaperArticle",
+        "preprint",
+        "report",
+        "thesis",
+    }
+)
+
 
 @dataclass
 class SyncReport:
@@ -26,6 +42,7 @@ class MissingPaper:
     title: str
     doi: str | None
     attachment_keys: tuple[str, ...] = ()
+    item_type: str = "journalArticle"
 
 
 def sync_collection(
@@ -64,7 +81,12 @@ def sync_collection(
                     report.unchanged.append(item_key)
                 continue
             report.missing_papers.append(
-                MissingPaper(item_key, item_data.get("title", "Untitled"), item_data.get("DOI"))
+                MissingPaper(
+                    item_key,
+                    item_data.get("title", "Untitled"),
+                    item_data.get("DOI"),
+                    item_type=item_type,
+                )
             )
             logger.info("Missing PDF: %s", item_data.get("title", "Untitled"))
             continue
@@ -96,6 +118,7 @@ def sync_collection(
                     item_data.get("title", "Untitled"),
                     item_data.get("DOI"),
                     tuple(key for key in missing_keys if key),
+                    item_type,
                 )
             )
     return report
@@ -105,9 +128,21 @@ def _pdf_attachments(zotero: Any, parent_key: str) -> list[dict]:
     return [
         child
         for child in zotero.children(parent_key)
-        if child.get("data", {}).get("itemType") == "attachment"
-        and child.get("data", {}).get("contentType") == "application/pdf"
+        if is_pdf_attachment(child.get("data", {}))
     ]
+
+
+def is_pdf_attachment(data: dict[str, Any]) -> bool:
+    """Use Zotero's attachment metadata to identify PDF attachments."""
+    return (
+        data.get("itemType") == "attachment"
+        and data.get("contentType", "").casefold() == "application/pdf"
+    )
+
+
+def is_remote_downloadable_item(item_type: str) -> bool:
+    """Return whether a Zotero parent type is suitable for DOI-to-PDF retrieval."""
+    return item_type in PAPER_ITEM_TYPES
 
 
 def _find_local_pdf(
