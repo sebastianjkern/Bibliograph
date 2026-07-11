@@ -137,13 +137,13 @@ uv run bibliograph download-pdf --title "Paper title" --output-dir pdfs
 
 The command resolves the Zotero parent item internally, finds its PDF attachment, and skips the download if that attachment is already local. If multiple papers match a title, use the DOI or the optional parent item key. If one item has multiple PDFs, select one with `--attachment-key`.
 
-To download from a remote legal open-access source instead of a Zotero attachment, use Unpaywall with a DOI:
+To download from remote legal open-access sources instead of a Zotero attachment, use the resolver chain with a DOI:
 
 ```bash
 uv run bibliograph download-pdf --source remote --doi 10.1234/example --output-dir pdfs
 ```
 
-Set `UNPAYWALL_EMAIL` in `.env`. The remote backend uses Unpaywall’s listed open-access PDF locations and refuses responses that are not PDFs. It does not bypass publisher paywalls.
+Set `UNPAYWALL_EMAIL` in `.env`. The chain checks Unpaywall first and can fall back to OpenAlex when `OPENALEX_API_KEY` is configured. It only accepts HTTPS URLs explicitly marked as open access by those providers, validates that the response is a PDF, and does not bypass publisher paywalls.
 
 ### Run the complete citation check
 
@@ -178,7 +178,9 @@ To use remote open-access downloads instead:
 uv run bibliograph check example.tex "My Collection" --pdf-dir pdfs --download-missing --download-source remote
 ```
 
-Remote downloads require a DOI and `UNPAYWALL_EMAIL`. Zotero still supplies the collection metadata and paper title; the PDF bytes come from the remote open-access location.
+Remote downloads require a DOI and either `UNPAYWALL_EMAIL` or `OPENALEX_API_KEY`. Zotero still supplies the collection metadata and paper title; the PDF bytes come from the remote open-access location.
+
+Remote resolvers are extensible through the `RemoteResolver` protocol in `bibliograph.remote`. A publisher-specific integration can implement `resolve(doi)` and return `RemoteCandidate` objects containing an HTTPS URL and an explicit legal basis. Pass custom resolvers to `download_remote_pdf(..., resolvers=[...])`; do not add arbitrary scraping or paywall-bypass handlers.
 
 Missing-paper names, DOIs, and available attachment keys are printed in the report. Papers without an available attachment key are still listed by title and DOI; the backend resolves them through the parent Zotero item when possible.
 

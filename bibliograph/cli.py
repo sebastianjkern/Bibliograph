@@ -113,11 +113,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.source == "remote":
             if not args.doi:
                 raise ValueError("Remote downloads require --doi")
-            from .remote import download_unpaywall_pdf
+            from .remote import download_remote_pdf
 
-            result = download_unpaywall_pdf(
+            result = download_remote_pdf(
                 args.doi,
                 args.output_dir,
+                email=os.getenv("UNPAYWALL_EMAIL"),
+                openalex_api_key=os.getenv("OPENALEX_API_KEY"),
                 title=args.title,
                 item_key=args.item_key,
             )
@@ -162,16 +164,18 @@ def main(argv: list[str] | None = None) -> int:
             if args.download_missing:
                 from connections.reload_embeddings import download_pdf_for_item
 
-                from .remote import download_unpaywall_pdf
+                from .remote import download_remote_pdf
 
                 for missing in report.missing_papers:
                     try:
                         if args.download_source == "remote":
                             if not missing.doi:
                                 continue
-                            result = download_unpaywall_pdf(
+                            result = download_remote_pdf(
                                 missing.doi,
                                 args.pdf_dir,
+                                email=os.getenv("UNPAYWALL_EMAIL"),
+                                openalex_api_key=os.getenv("OPENALEX_API_KEY"),
                                 title=missing.title,
                                 item_key=missing.item_key,
                             )
