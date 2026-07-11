@@ -1,12 +1,20 @@
 import os
+from dataclasses import dataclass
 from pathlib import Path
-
-from dotenv import load_dotenv
-from pyzotero import Zotero
+from typing import Any
 
 
-def load_zotero_client() -> Zotero:
+@dataclass(frozen=True)
+class DownloadResult:
+    path: str
+    downloaded: bool
+    attachment_key: str
+
+
+def load_zotero_client() -> Any:
     """Load Zotero credentials from environment and return a Zotero client."""
+    from dotenv import load_dotenv
+
     load_dotenv()
 
     library_id = os.getenv("ZOTERO_LIBRARY_ID")
@@ -18,10 +26,12 @@ def load_zotero_client() -> Zotero:
             "ZOTERO_LIBRARY_ID and ZOTERO_API_KEY must be set in the environment."
         )
 
+    from pyzotero import Zotero
+
     return Zotero(library_id, library_type=library_type, api_key=api_key)
 
 
-def find_collection_key(zot: Zotero, collection_identifier: str) -> str:
+def find_collection_key(zot: Any, collection_identifier: str) -> str:
     """Resolve a collection identifier to a Zotero collection key.
 
     The identifier can be either the collection key or the collection name.
@@ -43,12 +53,12 @@ def find_collection_key(zot: Zotero, collection_identifier: str) -> str:
     )
 
 
-def fetch_collection_items(zot: Zotero, collection_key: str) -> list[dict]:
+def fetch_collection_items(zot: Any, collection_key: str) -> list[dict]:
     """Fetch all items contained in a Zotero collection."""
     return zot.everything(zot.collection_items(collection_key))
 
 
-def find_pdf_attachment_ids(zot: Zotero, item_key: str, item_type: str) -> list[str]:
+def find_pdf_attachment_ids(zot: Any, item_key: str, item_type: str) -> list[str]:
     """Return all PDF attachment keys for the given item."""
     pdf_keys: list[str] = []
 
@@ -77,7 +87,7 @@ def safe_filename(name: str) -> str:
 
 
 def download_pdf_attachment(
-    zot: Zotero, attachment_key: str, output_dir: str
+    zot: Any, attachment_key: str, output_dir: str
 ) -> str:
     """Download a single PDF attachment and return its saved path."""
     pdf_bytes = zot.file(attachment_key)
@@ -95,57 +105,66 @@ def download_pdf_attachment(
     return str(filepath)
 
 
+def find_local_pdf(output_dir: str, attachment_key: str) -> Path | None:
+    """Find a previously downloaded PDF for one Zotero attachment key."""
+    directory = Path(output_dir)
+    exact = directory / f"{attachment_key}.pdf"
+    if exact.is_file():
+        return exact
+    matches = sorted(directory.glob(f"*-{attachment_key}.pdf"))
+    return matches[0] if matches else None
+
+
+def download_pdf_for_item(
+    item_key: str,
+    output_dir: str = "pdfs",
+    attachment_key: str | None = None,
+) -> DownloadResult:
+    """Download one PDF attachment for one Zotero item, only if it is not local.
+
+    ``item_key`` may be a parent item key or an attachment key. When a parent has
+    multiple PDF attachments, pass ``attachment_key`` to select one explicitly;
+    otherwise only the first PDF attachment is considered.
+    """
+    if not item_key:
+        raise ValueError("item_key must not be empty")
+    zot = load_zotero_client()
+    item = zot.item(item_key)
+    item_data = item.get("data", {})
+    attachment_keys = find_pdf_attachment_ids(
+        zot, item_key, item_data.get("itemType", "")
+    )
+    if attachment_key:
+        if attachment_key not in attachment_keys:
+            raise ValueError(f"Attachment {attachment_key} is not a PDF for item {item_key}")
+        selected_key = attachment_key
+    elif attachment_keys:
+        selected_key = attachment_keys[0]
+    else:
+        raise ValueError(f"No PDF attachment found for Zotero item {item_key}")
+
+    existing = find_local_pdf(output_dir, selected_key)
+    if existing:
+        return DownloadResult(str(existing), downloaded=False, attachment_key=selected_key)
+    path = download_pdf_attachment(zot, selected_key, output_dir)
+    return DownloadResult(path, downloaded=True, attachment_key=selected_key)
+
+
 def download_pdfs_for_collection(
     collection_identifier: str, output_dir: str = "pdfs"
 ) -> list[str]:
-    """Retrieve all available PDF attachments for items in the specified Zotero collection.
-
-    Args:
-        collection_identifier: Zotero collection key or name.
-        output_dir: Directory where PDF files will be saved.
-
-    Returns:
-        List of saved PDF file paths.
-    """
-    zot = load_zotero_client()
-    collection_key = find_collection_key(zot, collection_identifier)
-    items = fetch_collection_items(zot, collection_key)
-
-    saved_paths: list[str] = []
-    downloaded_keys = set()
-
-    for item in items:
-        data = item.get("data", {})
-        item_key = data.get("key")
-        item_type = data.get("itemType", "")
-
-        if not item_key:
-            continue
-
-        pdf_keys = find_pdf_attachment_ids(zot, item_key, item_type)
-        for pdf_key in pdf_keys:
-            if pdf_key in downloaded_keys:
-                continue
-            try:
-                path = download_pdf_attachment(zot, pdf_key, output_dir)
-                saved_paths.append(path)
-                downloaded_keys.add(pdf_key)
-            except Exception as exc:
-                print(f"Failed to download PDF {pdf_key}: {exc}")
-
-    return saved_paths
+    """Prevent accidental collection-wide downloads."""
+    raise RuntimeError(
+        "Collection-wide PDF downloads are disabled; use download_pdf_for_item(item_key)"
+    )
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Download all PDFs for items in a Zotero collection."
-    )
-    parser.add_argument(
-        "collection",
-        help="Zotero collection key or name to retrieve PDFs from.",
-    )
+    parser = argparse.ArgumentParser(description="Download one missing PDF from Zotero.")
+    parser.add_argument("item_key", help="Zotero parent item or attachment key")
+    parser.add_argument("--attachment-key", help="Select one PDF when there are several")
     parser.add_argument(
         "--output-dir",
         default="pdfs",
@@ -153,5 +172,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    downloaded = download_pdfs_for_collection(args.collection, args.output_dir)
-    print(f"Downloaded {len(downloaded)} PDF(s) to '{args.output_dir}'.")
+    result = download_pdf_for_item(args.item_key, args.output_dir, args.attachment_key)
+    status = "Downloaded" if result.downloaded else "Already present"
+    print(f"{status}: {result.path}")

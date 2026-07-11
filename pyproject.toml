@@ -21,7 +21,7 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 bibliograph = "bibliograph.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["bibliograph*"]
+include = ["bibliograph*", "connections*"]
 
 [tool.ruff]
 line-length = 100

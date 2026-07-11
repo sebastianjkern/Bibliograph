@@ -34,6 +34,13 @@ def build_parser() -> argparse.ArgumentParser:
     index.add_argument("--year")
     index.add_argument("--doi")
 
+    download = subparsers.add_parser(
+        "download-pdf", help="Download one missing PDF attachment from Zotero"
+    )
+    download.add_argument("item_key", help="Zotero parent item or attachment key")
+    download.add_argument("--attachment-key", help="Select one PDF when the item has several")
+    download.add_argument("--output-dir", type=Path, default=Path("pdfs"))
+
     suggest = subparsers.add_parser("suggest", help="Suggest citations for a draft file")
     suggest.add_argument("draft", type=Path)
     suggest.add_argument("--limit", type=int, default=5)
@@ -53,6 +60,18 @@ def _embedder(provider: str, model: str | None, base_url: str | None):
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "download-pdf":
+        from connections.reload_embeddings import download_pdf_for_item
+
+        result = download_pdf_for_item(
+            args.item_key,
+            str(args.output_dir),
+            args.attachment_key,
+        )
+        status = "Downloaded" if result.downloaded else "Already present"
+        print(f"{status}: {result.path}")
+        return 0
+
     embedder = _embedder(args.embedding_provider, args.model, args.embedding_base_url)
     index = SQLiteIndex(args.db)
     try:

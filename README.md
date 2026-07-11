@@ -73,7 +73,7 @@ For grounded LLM rationales, set `OPENAI_API_KEY` and pass an OpenAI-compatible 
 bibliograph suggest draft.txt --llm-model local-model --output suggestions.md
 ```
 
-### Download PDFs from a Zotero collection
+### Download one missing PDF from Zotero
 
 Set environment variables in a `.env` file:
 
@@ -83,11 +83,13 @@ ZOTERO_LIBRARY_TYPE=<library_type>
 ZOTERO_API_KEY=<your_api_key>
 ```
 
-Run:
+Download a single parent item’s first PDF attachment. If that attachment is already present locally, nothing is downloaded:
 
 ```bash
-python connections/reload_embeddings.py "My Collection Name" --output-dir pdfs
+bibliograph download-pdf PARENT_ITEM_KEY --output-dir pdfs
 ```
+
+If the parent has several PDFs, select one explicitly with `--attachment-key`. This command never enumerates or downloads an entire collection.
 
 ### Run the original sentence-level prototype
 
