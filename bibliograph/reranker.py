@@ -63,14 +63,18 @@ class OpenAIReranker:
             ],
         )
         content = response.choices[0].message.content or "{}"
-        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
-        payload = json.loads(content)
+        payload = _parse_json_payload(content)
         items = payload.get("items", [])
         ranking = []
         seen = set()
         for item in items:
+            if not isinstance(item, dict):
+                continue
             index = item.get("candidate")
-            score = float(item.get("support", 0.0))
+            try:
+                score = float(item.get("support", 0.0))
+            except (TypeError, ValueError):
+                continue
             if isinstance(index, int) and 0 <= index < len(sources) and index not in seen:
                 ranking.append((index, max(0.0, min(1.0, score))))
                 seen.add(index)
@@ -80,6 +84,29 @@ class OpenAIReranker:
             if index not in seen
         )
         return ranking
+
+
+def _parse_json_payload(content: str | list[dict]) -> dict:
+    """Parse JSON from plain, fenced, or reasoning-wrapped model output."""
+    if isinstance(content, list):
+        content = "".join(
+            part.get("text", "") for part in content if isinstance(part, dict)
+        )
+    if not isinstance(content, str):
+        raise ValueError("LLM response content is not text")
+    cleaned = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"<think>.*$", "", cleaned, flags=re.DOTALL | re.IGNORECASE).strip()
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE).strip()
+    try:
+        payload = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        payload = json.loads(cleaned[start : end + 1])
+    if not isinstance(payload, dict):
+        raise ValueError("LLM reranker response must be a JSON object")
+    return payload
 
 
 def rerank_matches(matches: Sequence[DraftMatch], reranker: Reranker) -> list[DraftMatch]:

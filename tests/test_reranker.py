@@ -1,6 +1,6 @@
 from bibliograph.config import openai_settings
 from bibliograph.models import CitationSource, DraftMatch, Paper, TextChunk
-from bibliograph.reranker import OpenAIReranker, rerank_matches
+from bibliograph.reranker import OpenAIReranker, _parse_json_payload, rerank_matches
 
 
 class _Response:
@@ -44,3 +44,12 @@ def test_openai_settings_fall_back_when_api_key_is_empty(monkeypatch):
     monkeypatch.setenv("OPENAI_BASE_URL", "")
 
     assert openai_settings() == ("lm-studio", "http://localhost:1234/v1")
+
+
+def test_reranker_parses_qwen_reasoning_and_markdown_json():
+    payload = _parse_json_payload(
+        '<think>Need to compare the evidence.</think>\n'
+        'Here is the result:\n```json\n{"items": []}\n```'
+    )
+
+    assert payload == {"items": []}
