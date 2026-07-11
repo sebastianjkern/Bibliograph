@@ -99,6 +99,20 @@ For local semantic embeddings, use SentenceTransformers:
 uv run bibliograph --embedding-provider sentence-transformers --model all-MiniLM-L6-v2 check example.tex "My Collection"
 ```
 
+SentenceTransformers models are cached persistently. Set a custom cache location with `SENTENCE_TRANSFORMERS_CACHE` or `--embedding-cache-dir`:
+
+```bash
+uv run bibliograph --embedding-provider sentence-transformers --embedding-cache-dir .cache/models check example.tex "My Collection"
+```
+
+After the model has been downloaded once, prevent all Hugging Face network checks with offline mode:
+
+```bash
+uv run bibliograph --embedding-provider sentence-transformers --embedding-cache-dir .cache/models --embedding-offline check example.tex "My Collection"
+```
+
+The same setting can be enabled in `.env` with `SENTENCE_TRANSFORMERS_OFFLINE=true`. Offline mode requires the requested model to already exist in the cache.
+
 For OpenAI or another OpenAI-compatible embeddings API, set `OPENAI_API_KEY` and optionally `OPENAI_BASE_URL` in `.env`:
 
 ```bash

@@ -2,6 +2,7 @@ import hashlib
 import math
 import os
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Protocol
 
 
@@ -31,14 +32,52 @@ class HashEmbedder:
 
 
 class SentenceTransformerEmbedder:
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(
+        self,
+        model_name: str = "all-MiniLM-L6-v2",
+        cache_dir: str | None = None,
+        local_files_only: bool = False,
+    ):
         from sentence_transformers import SentenceTransformer
 
-        self.model = SentenceTransformer(model_name)
+        self.cache_dir = cache_dir or _sentence_transformer_cache_dir()
+        self.local_files_only = local_files_only
+        self.model = SentenceTransformer(
+            model_name,
+            cache_folder=self.cache_dir,
+            local_files_only=local_files_only,
+        )
         self.dimension = self.model.get_sentence_embedding_dimension()
+
+    @classmethod
+    def from_environment(
+        cls,
+        model_name: str | None = None,
+        cache_dir: str | None = None,
+        local_files_only: bool | None = None,
+    ):
+        if local_files_only is None:
+            local_files_only = _env_bool("SENTENCE_TRANSFORMERS_OFFLINE") or _env_bool(
+                "HF_HUB_OFFLINE"
+            )
+        return cls(
+            model_name or os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
+            cache_dir,
+            local_files_only,
+        )
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         return self.model.encode(list(texts), normalize_embeddings=True).tolist()
+
+
+def _sentence_transformer_cache_dir() -> str:
+    return os.getenv("SENTENCE_TRANSFORMERS_CACHE") or os.getenv("HF_HOME") or str(
+        Path.home() / ".cache" / "huggingface"
+    )
+
+
+def _env_bool(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class OpenAICompatibleEmbedder:

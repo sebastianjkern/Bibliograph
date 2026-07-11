@@ -27,6 +27,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--model", help="Embedding model name for sentence-transformers or OpenAI-compatible APIs"
     )
     parser.add_argument("--embedding-base-url", help="Base URL for an OpenAI-compatible API")
+    parser.add_argument(
+        "--embedding-cache-dir", help="Persistent cache directory for SentenceTransformers models"
+    )
+    parser.add_argument(
+        "--embedding-offline",
+        action="store_true",
+        default=None,
+        help="Load SentenceTransformers only from the local cache",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     index = subparsers.add_parser("index-pdf", help="Index one PDF with its citation metadata")
@@ -69,9 +78,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _embedder(provider: str, model: str | None, base_url: str | None):
+def _embedder(
+    provider: str,
+    model: str | None,
+    base_url: str | None,
+    cache_dir: str | None,
+    offline: bool | None,
+):
     if provider == "sentence-transformers":
-        return SentenceTransformerEmbedder(model or "all-MiniLM-L6-v2")
+        return SentenceTransformerEmbedder.from_environment(model, cache_dir, offline)
     if provider == "openai":
         return OpenAICompatibleEmbedder.from_environment(model, base_url)
     return HashEmbedder()
@@ -93,7 +108,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{status}: {result.path}")
         return 0
 
-    embedder = _embedder(args.embedding_provider, args.model, args.embedding_base_url)
+    embedder = _embedder(
+        args.embedding_provider,
+        args.model,
+        args.embedding_base_url,
+        args.embedding_cache_dir,
+        args.embedding_offline,
+    )
     index = SQLiteIndex(args.db)
     try:
         if args.command == "index-pdf":

@@ -2,7 +2,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from bibliograph.chunking import chunk_pages, split_text
-from bibliograph.embeddings import HashEmbedder, OpenAICompatibleEmbedder
+from bibliograph.embeddings import (
+    HashEmbedder,
+    OpenAICompatibleEmbedder,
+    SentenceTransformerEmbedder,
+)
 from bibliograph.models import Paper
 from bibliograph.store import SQLiteIndex
 
@@ -68,3 +72,27 @@ def test_sqlite_vec_index_persists_across_reopen():
         reopened.close()
 
     assert result[0].chunk.paper.zotero_key == "PERSIST"
+
+
+def test_sentence_transformer_uses_persistent_cache_and_offline_mode(monkeypatch):
+    calls = []
+
+    class FakeModel:
+        def __init__(self, model_name, **kwargs):
+            calls.append((model_name, kwargs))
+
+        def get_sentence_embedding_dimension(self):
+            return 3
+
+    monkeypatch.setitem(__import__("sys").modules, "sentence_transformers", type(
+        "SentenceTransformers", (), {"SentenceTransformer": FakeModel}
+    ))
+    monkeypatch.setenv("SENTENCE_TRANSFORMERS_CACHE", ".cache/models")
+
+    embedder = SentenceTransformerEmbedder.from_environment(local_files_only=True)
+
+    assert embedder.cache_dir == ".cache/models"
+    assert calls == [(
+        "all-MiniLM-L6-v2",
+        {"cache_folder": ".cache/models", "local_files_only": True},
+    )]
