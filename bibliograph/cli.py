@@ -141,16 +141,22 @@ def main(argv: list[str] | None = None) -> int:
         if args.source == "remote":
             if not args.doi:
                 raise ValueError("Remote downloads require --doi")
-            from .remote import download_remote_pdf
+            from .remote import RemoteDownloadError, download_remote_pdf
 
-            result = download_remote_pdf(
-                args.doi,
-                args.output_dir,
-                email=os.getenv("UNPAYWALL_EMAIL"),
-                openalex_api_key=os.getenv("OPENALEX_API_KEY"),
-                title=args.title,
-                item_key=args.item_key,
-            )
+            try:
+                result = download_remote_pdf(
+                    args.doi,
+                    args.output_dir,
+                    email=os.getenv("UNPAYWALL_EMAIL"),
+                    openalex_api_key=os.getenv("OPENALEX_API_KEY"),
+                    title=args.title,
+                    item_key=args.item_key,
+                )
+            except RemoteDownloadError as error:
+                logger.error("Automatic download failed: %s", error)
+                for hint in error.hints:
+                    logger.error("Manual download hint (%s): %s", hint.source, hint.url)
+                return 1
         else:
             from connections.reload_embeddings import download_pdf_for_item
 
@@ -232,8 +238,10 @@ def main(argv: list[str] | None = None) -> int:
                                 if missing.attachment_keys
                                 else None,
                             )
-                    except (FileNotFoundError, ValueError):
+                    except (FileNotFoundError, ValueError) as error:
                         logger.warning("Could not download missing paper: %s", missing.title)
+                        for hint in getattr(error, "hints", ()):
+                            logger.warning("Manual download hint (%s): %s", hint.source, hint.url)
                         continue
                     downloaded.append(result.path)
                     logger.info("Downloaded: %s", result.path)

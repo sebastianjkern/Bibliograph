@@ -10,6 +10,10 @@ requires-python = ">=3.10"
 dependencies = ["sqlite-vec>=0.1.9"]
 
 [project.optional-dependencies]
+remote = [
+    "doidownloader>=0.1.0; python_version >= '3.12'",
+    "pyDOI>=0.2.1",
+]
 pdf = ["PyMuPDF>=1.24"]
 zotero = ["pyzotero>=1.5", "python-dotenv>=1.0"]
 embeddings = ["numpy>=1.26", "openai>=1.40", "sentence-transformers>=3.0"]

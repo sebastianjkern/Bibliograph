@@ -1,11 +1,15 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
 from bibliograph.remote import (
+    PyDOIResolver,
     RemoteCandidate,
+    RemoteDownloadError,
     ResolverChain,
+    download_remote_pdf,
     download_unpaywall_pdf,
 )
 
@@ -76,3 +80,78 @@ def test_resolver_chain_continues_after_a_failed_resolver():
 
     candidates = ResolverChain([FailedResolver(), WorkingResolver()]).resolve("10/example")
     assert candidates[0].resolver == "working"
+
+
+def test_remote_download_uses_doidownloader_by_default(monkeypatch):
+    monkeypatch.setattr(
+        "bibliograph.remote._retrieve_with_doidownloader",
+        lambda doi, email: (b"%PDF-doidownloader", "https://publisher.example/paper.pdf"),
+    )
+    with TemporaryDirectory(dir=".") as directory:
+        result = download_remote_pdf("10/example", directory, title="Paper", item_key="P1")
+
+        assert Path(result.path).read_bytes() == b"%PDF-doidownloader"
+        assert result.resolver == "doidownloader"
+        assert result.source_url == "https://publisher.example/paper.pdf"
+
+
+def test_doidownloader_adapter_reads_pdf_content_from_lookup_result(monkeypatch):
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+    package = ModuleType("doidownloader")
+    package.DOIDownloader = lambda email_address=None: Client()
+    implementation = ModuleType("doidownloader.doidownloader")
+
+    async def retrieve_best_fulltext(doi, client):
+        return ("https://publisher.example/paper.pdf", None, 200, b"%PDF-real", "pdf")
+
+    implementation.retrieve_best_fulltext = retrieve_best_fulltext
+    monkeypatch.setitem(__import__("sys").modules, "doidownloader", package)
+    monkeypatch.setitem(__import__("sys").modules, "doidownloader.doidownloader", implementation)
+
+    from bibliograph.remote import _retrieve_with_doidownloader
+
+    assert _retrieve_with_doidownloader("10/example", None) == (
+        b"%PDF-real",
+        "https://publisher.example/paper.pdf",
+    )
+
+
+def test_remote_download_exposes_manual_pydoi_hints(monkeypatch):
+    monkeypatch.setattr(
+        "bibliograph.remote._retrieve_with_doidownloader",
+        lambda doi, email: (_ for _ in ()).throw(FileNotFoundError("not found")),
+    )
+    hint = SimpleNamespace(
+        url="https://publisher.example/article",
+        source="pydoi",
+        reason="Download manually",
+    )
+    monkeypatch.setattr("bibliograph.remote.PyDOIResolver.manual_hints", lambda self, doi: [hint])
+
+    with TemporaryDirectory(dir=".") as directory:
+        with pytest.raises(RemoteDownloadError) as error:
+            download_remote_pdf("10/example", directory)
+
+    assert error.value.hints == (hint,)
+
+
+def test_pydoi_resolver_returns_https_manual_landing_pages(monkeypatch):
+    fake_pydoi = SimpleNamespace(
+        get_url=lambda doi, allow_multi: [
+            "https://publisher.example/article",
+            "http://insecure.example/article",
+        ]
+    )
+    monkeypatch.setitem(__import__("sys").modules, "pydoi", fake_pydoi)
+
+    candidates = PyDOIResolver().resolve("10/Example")
+
+    assert [candidate.url for candidate in candidates] == [
+        "https://publisher.example/article"
+    ]

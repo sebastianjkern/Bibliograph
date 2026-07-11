@@ -39,7 +39,7 @@ Bibliograph never downloads an entire Zotero collection automatically.
 Install the package and the tools used by the complete workflow:
 
 ```bash
-uv sync --extra dev --extra pdf --extra zotero --extra embeddings --extra llm
+uv sync --extra dev --extra pdf --extra zotero --extra embeddings --extra llm --extra remote
 ```
 
 Copy the environment template:
@@ -136,13 +136,15 @@ uv run bibliograph download-pdf --title "Paper title" --output-dir pdfs
 
 The command resolves the Zotero parent item internally, finds its PDF attachment, and skips the download if that attachment is already local. If multiple papers match a title, use the DOI or the optional parent item key. If one item has multiple PDFs, select one with `--attachment-key`.
 
-To download from remote legal open-access sources instead of a Zotero attachment, use the resolver chain with a DOI:
+To download from a remote source instead of a Zotero attachment, use a DOI:
 
 ```bash
 uv run bibliograph download-pdf --source remote --doi 10.1234/example --output-dir pdfs
 ```
 
-Set `UNPAYWALL_EMAIL` in `.env`. The chain checks Unpaywall first and can fall back to OpenAlex when `OPENALEX_API_KEY` is configured. It only accepts HTTPS URLs explicitly marked as open access by those providers, validates that the response is a PDF, and does not bypass publisher paywalls.
+Remote downloads use `doidownloader`. It checks the DOI's publisher route, publisher metadata, known publisher PDF routes, and legally available open-access locations. This can use publisher access provided by your university network, but it does not bypass authentication or paywalls. Install the optional `remote` extra first; `doidownloader` requires Python 3.12 or newer.
+
+If automatic retrieval fails, Bibliograph uses `pyDOI` to resolve the DOI and logs the publisher landing page and DOI URL as manual download hints. Open one of those URLs in a browser with your institutional access, save the PDF into `pdfs`, and rerun the check.
 
 ### Run the complete citation check
 
@@ -163,7 +165,7 @@ The command:
 * returns the closest evidence passages; and
 * optionally reranks candidates with an LLM.
 
-It does not download PDFs. Use the single-item command above for each missing paper, then rerun `check`.
+It downloads missing PDFs one at a time when `--download-missing` is enabled. It never bulk-downloads the collection.
 
 To let `check` download missing papers through the Zotero attachment backend, opt in explicitly:
 
@@ -177,7 +179,7 @@ To use remote open-access downloads instead:
 uv run bibliograph check example.tex "My Collection" --pdf-dir pdfs --download-missing --download-source remote
 ```
 
-Remote downloads require a DOI and either `UNPAYWALL_EMAIL` or `OPENALEX_API_KEY`. Zotero still supplies the collection metadata and paper title; the PDF bytes come from the remote open-access location.
+Remote downloads require a DOI. Zotero still supplies the collection metadata and paper title; the PDF bytes come from the publisher or legal open-access route selected by `doidownloader`.
 
 Remote resolvers are extensible through the `RemoteResolver` protocol in `bibliograph.remote`. A publisher-specific integration can implement `resolve(doi)` and return `RemoteCandidate` objects containing an HTTPS URL and an explicit legal basis. Pass custom resolvers to `download_remote_pdf(..., resolvers=[...])`; do not add arbitrary scraping or paywall-bypass handlers.
 
