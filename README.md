@@ -1,3 +1,5 @@
+![Bibliograph-Banner](./github-banner.svg)
+
 # Bibliograph
 
 Bibliograph helps find citation evidence in a local Zotero-backed paper library. It supports LaTeX and Typst drafts, semantic search, local LLM reranking, legal PDF retrieval, and a persistent SQLite/sqlite-vec index.
