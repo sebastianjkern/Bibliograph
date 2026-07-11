@@ -67,6 +67,9 @@ def sync_collection(
         item_type = item_data.get("itemType", "")
         if not item_key or item_type == "attachment":
             continue
+        if not is_remote_downloadable_item(item_type):
+            logger.debug("Skipping unsupported Zotero item type %s: %s", item_type, item_key)
+            continue
         attachments = _pdf_attachments(zotero, item_key)
         if not attachments:
             local_path = _find_local_pdf(pdf_dir, "", item_key, item_data.get("DOI"))

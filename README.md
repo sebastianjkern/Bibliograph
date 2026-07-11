@@ -226,7 +226,7 @@ uv run bibliograph check example.tex "My Collection" --pdf-dir pdfs --download-m
 
 Remote downloads require a DOI. Zotero still supplies the collection metadata and paper title; the PDF bytes come from the publisher or legal open-access route selected by `doidownloader`.
 
-Remote PDF downloads are limited to paper-like Zotero item types (`journalArticle`, `book`, `conferencePaper`, `report`, `thesis`, `preprint`, and related types). Datasets, webpages, software, media, and other non-paper records are reported but are not sent to a DOI-to-PDF downloader. Zotero PDF attachments are selected using the attachment's `contentType` metadata.
+PDF indexing and remote downloads are limited to paper-like Zotero item types (`journalArticle`, `book`, `conferencePaper`, `report`, `thesis`, `preprint`, and related types). Datasets, webpages, software, media, and other non-paper records are ignored before attachment lookup or download. Zotero PDF attachments are selected using the attachment's `contentType` metadata.
 
 Remote resolvers are extensible through the `RemoteResolver` protocol in `bibliograph.remote`. A publisher-specific integration can implement `resolve(doi)` and return `RemoteCandidate` objects containing an HTTPS URL and an explicit legal basis. Pass custom resolvers to `download_remote_pdf(..., resolvers=[...])`; do not add arbitrary scraping or paywall-bypass handlers.
 

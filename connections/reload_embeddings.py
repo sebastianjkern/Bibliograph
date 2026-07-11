@@ -3,7 +3,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from bibliograph.zotero_sync import is_pdf_attachment, is_pdf_file
+from bibliograph.zotero_sync import (
+    is_pdf_attachment,
+    is_pdf_file,
+    is_remote_downloadable_item,
+)
 
 
 @dataclass(frozen=True)
@@ -174,6 +178,11 @@ def download_pdf_for_item(
     item_key = resolve_item_key(zot, item_key, doi, title)
     item = zot.item(item_key)
     item_data = item.get("data", {})
+    if not is_remote_downloadable_item(item_data.get("itemType", "")):
+        raise ValueError(
+            f"Zotero item {item_key} has unsupported type {item_data.get('itemType', '')!r}; "
+            "PDF downloads are limited to paper-like items"
+        )
     attachment_keys = find_pdf_attachment_ids(
         zot, item_key, item_data.get("itemType", "")
     )

@@ -77,3 +77,22 @@ def test_remote_download_filter_excludes_non_paper_item_types():
     assert is_remote_downloadable_item("journalArticle")
     assert not is_remote_downloadable_item("dataset")
     assert not is_remote_downloadable_item("webpage")
+
+
+def test_sync_skips_unsupported_zotero_items_before_pdf_lookup():
+    class NonPaperZotero:
+        def everything(self, request):
+            return request
+
+        def collection_items(self, key):
+            return [{"data": {"key": "D1", "itemType": "dataset", "DOI": "10/dataset"}}]
+
+        def children(self, key):
+            raise AssertionError("unsupported items must not be inspected for attachments")
+
+    index = SQLiteIndex(":memory:")
+    with TemporaryDirectory(dir=".") as directory:
+        report = sync_collection(NonPaperZotero(), "COL1", directory, index, HashEmbedder())
+
+    assert report.missing_papers == []
+    assert report.missing_local_pdf == []
