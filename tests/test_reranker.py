@@ -10,10 +10,13 @@ class _Response:
 
 
 class _Client:
+    calls = []
+
     class chat:
         class completions:
             @staticmethod
             def create(**kwargs):
+                _Client.calls.append(kwargs)
                 return _Response(
                     '{"items": [{"candidate": 1, "support": 0.95}, '
                     '{"candidate": 0, "support": 0.2}]}'
@@ -33,6 +36,7 @@ def test_llm_reranker_orders_candidates_and_clamps_scores():
 
     assert result.sources[0].chunk.text == "strong evidence"
     assert result.sources[0].score == 0.95
+    assert "response_format" not in _Client.calls[-1]
 
 
 def test_openai_settings_fall_back_when_api_key_is_empty(monkeypatch):

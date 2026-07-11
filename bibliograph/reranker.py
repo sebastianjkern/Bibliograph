@@ -49,7 +49,6 @@ class OpenAIReranker:
         response = self.client.chat.completions.create(
             model=self.model,
             temperature=0,
-            response_format={"type": "json_object"},
             messages=[
                 {
                     "role": "system",
