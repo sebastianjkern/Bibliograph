@@ -85,6 +85,7 @@ embeddings = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "openai" },
     { name = "sentence-transformers" },
 ]
 llm = [
@@ -104,6 +105,7 @@ zotero = [
 [package.metadata]
 requires-dist = [
     { name = "numpy", marker = "extra == 'embeddings'", specifier = ">=1.26" },
+    { name = "openai", marker = "extra == 'embeddings'", specifier = ">=1.40" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=1.40" },
     { name = "pymupdf", marker = "extra == 'pdf'", specifier = ">=1.24" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },

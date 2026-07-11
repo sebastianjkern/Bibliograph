@@ -2,7 +2,7 @@ import argparse
 import os
 from pathlib import Path
 
-from .embeddings import HashEmbedder, SentenceTransformerEmbedder
+from .embeddings import HashEmbedder, OpenAICompatibleEmbedder, SentenceTransformerEmbedder
 from .export import to_markdown
 from .ingest import index_pdf
 from .models import Paper
@@ -15,8 +15,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Find citation evidence in a local paper library.")
     parser.add_argument("--db", default="bibliograph.db", help="SQLite index path")
     parser.add_argument(
-        "--model", help="SentenceTransformer model; defaults to deterministic hash vectors"
+        "--embedding-provider",
+        choices=("hash", "sentence-transformers", "openai"),
+        default="hash",
+        help="Embedding backend (default: hash)",
     )
+    parser.add_argument(
+        "--model", help="Embedding model name for sentence-transformers or OpenAI-compatible APIs"
+    )
+    parser.add_argument("--embedding-base-url", help="Base URL for an OpenAI-compatible API")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     index = subparsers.add_parser("index-pdf", help="Index one PDF with its citation metadata")
@@ -36,13 +43,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _embedder(model: str | None):
-    return SentenceTransformerEmbedder(model) if model else HashEmbedder()
+def _embedder(provider: str, model: str | None, base_url: str | None):
+    if provider == "sentence-transformers":
+        return SentenceTransformerEmbedder(model or "all-MiniLM-L6-v2")
+    if provider == "openai":
+        return OpenAICompatibleEmbedder.from_environment(model, base_url)
+    return HashEmbedder()
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    embedder = _embedder(args.model)
+    embedder = _embedder(args.embedding_provider, args.model, args.embedding_base_url)
     index = SQLiteIndex(args.db)
     try:
         if args.command == "index-pdf":

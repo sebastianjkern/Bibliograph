@@ -19,6 +19,7 @@ This repository is an early-stage prototype rather than a finished product. It c
 * Downloads PDF attachments from Zotero items in a given collection.
 * Extracts text from local PDF files and splits it into searchable sentences.
 * Stores page-aware chunk embeddings and complete citation metadata in a persistent SQLite index.
+* Supports deterministic local vectors, SentenceTransformer models, and OpenAI-compatible embedding APIs.
 * Scans a draft paragraph-by-paragraph and returns matching evidence with scores.
 * Formats grounded citation suggestions with author, year, DOI, and page information.
 
@@ -42,12 +43,23 @@ Copy `.env.example` to `.env` when using Zotero or an OpenAI-compatible model.
 
 ### Index a PDF
 
-The CLI uses deterministic local vectors by default, which is useful for testing. Pass `--model all-MiniLM-L6-v2` after installing the embeddings extra for semantic embeddings.
+The CLI uses deterministic local vectors by default, which is useful for testing. Pass `--model all-MiniLM-L6-v2` with `--embedding-provider sentence-transformers` after installing the embeddings extra for semantic embeddings.
 
 ```bash
 bibliograph index-pdf paper.pdf --key ABC123 --title "Paper title" \
   --author "Author surname" --year 2024 --doi 10.1234/example
 ```
+
+To use OpenAI or another OpenAI-compatible embeddings endpoint:
+
+```bash
+bibliograph --embedding-provider openai \
+  --model text-embedding-3-small \
+  --embedding-base-url https://api.openai.com/v1 \
+  index-pdf paper.pdf --key ABC123 --title "Paper title"
+```
+
+Set `OPENAI_API_KEY`, `OPENAI_EMBEDDING_MODEL`, and optionally `OPENAI_BASE_URL` in `.env`. Local compatible servers can use any non-empty API key accepted by the server.
 
 ### Scan a draft
 
