@@ -1,7 +1,8 @@
 import os
-from pyzotero import Zotero
+
 import pandas as pd
 from dotenv import load_dotenv
+from pyzotero import Zotero
 
 load_dotenv()
 
@@ -20,7 +21,6 @@ def download_pdfs_from_df(df: pd.DataFrame, output_dir: str = "pdfs"):
 
     for _, row in attachments.iterrows():
         key = row["key"]
-        title = row["title"]
 
         try:
             # Metadaten holen, um MIME-Type zu prüfen

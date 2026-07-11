@@ -1,5 +1,7 @@
 import os
+
 from pyzotero import Zotero  # Import the Zotero file handling library 
+
 
 def load_pdf_from_zotero(record_id: str) -> bytes:
     """

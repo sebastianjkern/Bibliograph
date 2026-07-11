@@ -1,7 +1,9 @@
-from pyzotero import Zotero
 import os
-from dotenv import load_dotenv
+
 import pandas as pd
+from dotenv import load_dotenv
+from pyzotero import Zotero
+
 
 def fetch_zotero_collections(output_file: str = "test.csv"):
     """

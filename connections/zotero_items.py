@@ -1,9 +1,11 @@
-from pyzotero import Zotero
 import os
-from dotenv import load_dotenv
-load_dotenv()  # Automatically loads variables from .env into os.environ
 
 import pandas as pd
+from dotenv import load_dotenv
+from pyzotero import Zotero
+
+load_dotenv()  # Automatically loads variables from .env into os.environ
+
 
 def fetch_zotero_items() -> pd.DataFrame:
     """
@@ -37,7 +39,6 @@ def fetch_zotero_items() -> pd.DataFrame:
             'title': item_data.get('title', 'N/A'),
             'type': item_data.get('itemType', 'Unknown'),
             # 'date_added': item_data.get('dateAdded', 'N/A'),
-            # 'creators': ', '.join([f'{creator["firstName"]} {creator["lastName"]}' for creator in item_data.get('creators', [])]),
             'abstract': item_data.get('abstractNote', 'No abstract available'),
             'tags': ', '.join([tag['tag'] for tag in item_data.get('tags', [])]),
             # 'repository': item_data.get('repository', 'N/A'),

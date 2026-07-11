@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from pyzotero import Zotero
@@ -15,7 +14,7 @@ def load_zotero_client() -> Zotero:
     api_key = os.getenv("ZOTERO_API_KEY")
 
     if not library_id or not api_key:
-        raise EnvironmentError(
+        raise OSError(
             "ZOTERO_LIBRARY_ID and ZOTERO_API_KEY must be set in the environment."
         )
 
@@ -44,14 +43,14 @@ def find_collection_key(zot: Zotero, collection_identifier: str) -> str:
     )
 
 
-def fetch_collection_items(zot: Zotero, collection_key: str) -> List[Dict]:
+def fetch_collection_items(zot: Zotero, collection_key: str) -> list[dict]:
     """Fetch all items contained in a Zotero collection."""
     return zot.everything(zot.collection_items(collection_key))
 
 
-def find_pdf_attachment_ids(zot: Zotero, item_key: str, item_type: str) -> List[str]:
+def find_pdf_attachment_ids(zot: Zotero, item_key: str, item_type: str) -> list[str]:
     """Return all PDF attachment keys for the given item."""
-    pdf_keys: List[str] = []
+    pdf_keys: list[str] = []
 
     if item_type == "attachment":
         item = zot.item(item_key)
@@ -98,7 +97,7 @@ def download_pdf_attachment(
 
 def download_pdfs_for_collection(
     collection_identifier: str, output_dir: str = "pdfs"
-) -> List[str]:
+) -> list[str]:
     """Retrieve all available PDF attachments for items in the specified Zotero collection.
 
     Args:
@@ -112,7 +111,7 @@ def download_pdfs_for_collection(
     collection_key = find_collection_key(zot, collection_identifier)
     items = fetch_collection_items(zot, collection_key)
 
-    saved_paths: List[str] = []
+    saved_paths: list[str] = []
     downloaded_keys = set()
 
     for item in items:

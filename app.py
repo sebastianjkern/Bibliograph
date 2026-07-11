@@ -1,6 +1,6 @@
+import chromadb
 import fitz  # PyMuPDF
 import nltk
-import chromadb
 from sentence_transformers import SentenceTransformer
 
 nltk.download('punkt')
