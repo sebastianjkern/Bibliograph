@@ -1,12 +1,13 @@
 # Bibliograph
 
-**Paracite** is a research discovery workspace for building a secondary paper retrieval pipeline centered on semantic search and Zotero PDF ingestion.
+Bibliograph is a local citation discovery assistant. It indexes papers from a Zotero-backed library, scans draft passages for semantic matches, and returns evidence-backed citation suggestions.
 
 ## Current State
 
 This repository is an early-stage prototype rather than a finished product. It currently provides:
 
-* `app.py` — a local proof-of-concept for extracting sentences from a PDF, embedding them with `sentence-transformers`, storing them in `chromadb`, and performing semantic search.
+* `bibliograph/` — the reusable ingestion, chunking, embedding, retrieval, suggestion, export, and CLI modules.
+* `app.py` — the original single-PDF proof-of-concept, retained for compatibility.
 * `connections/zotero_collections.py` — helper functions for fetching Zotero collection metadata.
 * `connections/zotero_items.py` — helper functions for fetching Zotero items and exporting them to CSV.
 * `connections/zotero_pdfs.py` — helper functions for downloading PDF attachments from Zotero item metadata.
@@ -17,9 +18,48 @@ This repository is an early-stage prototype rather than a finished product. It c
 * Collects Zotero items and collection metadata from a configured Zotero library.
 * Downloads PDF attachments from Zotero items in a given collection.
 * Extracts text from local PDF files and splits it into searchable sentences.
-* Stores sentence embeddings in a local Chroma collection for semantic retrieval.
+* Stores page-aware chunk embeddings and complete citation metadata in a persistent SQLite index.
+* Scans a draft paragraph-by-paragraph and returns matching evidence with scores.
+* Formats grounded citation suggestions with author, year, DOI, and page information.
 
 ## How to use the current tools
+
+### Setup
+
+Install the core package and development tools:
+
+```bash
+uv sync --extra dev
+```
+
+For PDF indexing, install the PDF extra. For a local embedding model, install the embeddings extra:
+
+```bash
+uv sync --extra pdf --extra embeddings
+```
+
+Copy `.env.example` to `.env` when using Zotero or an OpenAI-compatible model.
+
+### Index a PDF
+
+The CLI uses deterministic local vectors by default, which is useful for testing. Pass `--model all-MiniLM-L6-v2` after installing the embeddings extra for semantic embeddings.
+
+```bash
+bibliograph index-pdf paper.pdf --key ABC123 --title "Paper title" \
+  --author "Author surname" --year 2024 --doi 10.1234/example
+```
+
+### Scan a draft
+
+```bash
+bibliograph suggest draft.txt --output suggestions.md
+```
+
+For grounded LLM rationales, set `OPENAI_API_KEY` and pass an OpenAI-compatible chat model:
+
+```bash
+bibliograph suggest draft.txt --llm-model local-model --output suggestions.md
+```
 
 ### Download PDFs from a Zotero collection
 
@@ -37,7 +77,7 @@ Run:
 python connections/reload_embeddings.py "My Collection Name" --output-dir pdfs
 ```
 
-### Run sentence-level semantic search on a PDF
+### Run the original sentence-level prototype
 
 ```bash
 python app.py
@@ -49,22 +89,18 @@ The script currently opens `test.pdf`, extracts sentences, stores them in a loca
 
 The repository is not yet a complete discovery system. Remaining issues include:
 
-* No integrated Zotero-to-search pipeline yet: PDF download, text extraction, embedding, and indexing are separate scripts.
-* No central metadata storage or paper graph construction.
-* No web/API layer or user interface.
-* Limited error handling for PDF parsing and Zotero retrieval failures.
-* No test coverage or packaging for reusable modules.
-* Minimal handling of duplicate attachments, collection nesting, and library sync state.
+* Zotero downloading and indexing are not yet one automated sync command; the new CLI indexes local PDFs and the legacy connector downloads collection files.
+* OCR for scanned PDFs and structural section extraction are not yet included.
+* The SQLite index is intentionally small and uses brute-force cosine search.
+* No browser UI is included yet; Markdown export is the current review workflow.
 
 ## Future direction
 
 The next steps for the project are:
 
-* unify Zotero ingestion, PDF extraction, embedding generation, and vector store updates into a single pipeline
-* add metadata and relationship modeling for papers and collections
-* support a persistent retrieval layer with search and related-work APIs
-* integrate Zotero collection structure and item metadata more fully
-* add tests, configuration management, and a lightweight UI or API server
+* add automated Zotero sync with attachment hashes and collection metadata
+* add OCR, better academic chunking, hybrid retrieval, and reranking
+* add a lightweight UI or API server for review and citation insertion
 
 ## Why this matters
 
