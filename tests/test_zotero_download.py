@@ -62,7 +62,7 @@ def test_download_pdf_for_item_skips_existing_attachment(monkeypatch):
     monkeypatch.setattr("connections.reload_embeddings.load_zotero_client", lambda: zotero)
     with TemporaryDirectory(dir=".") as directory:
         output = Path(directory)
-        (output / "paper-ATTACH.pdf").write_bytes(b"existing")
+        (output / "paper-ATTACH.pdf").write_bytes(b"%PDF-existing")
 
         result = download_pdf_for_item("PARENT", directory)
 

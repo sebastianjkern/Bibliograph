@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from bibliograph.zotero_sync import is_pdf_file
+
 
 @dataclass(frozen=True)
 class DownloadResult:
@@ -152,10 +154,10 @@ def find_local_pdf(output_dir: str, attachment_key: str) -> Path | None:
     """Find a previously downloaded PDF for one Zotero attachment key."""
     directory = Path(output_dir)
     exact = directory / f"{attachment_key}.pdf"
-    if exact.is_file():
+    if is_pdf_file(exact):
         return exact
     matches = sorted(directory.glob(f"*-{attachment_key}.pdf"))
-    return matches[0] if matches else None
+    return next((match for match in matches if is_pdf_file(match)), None)
 
 
 def download_pdf_for_item(

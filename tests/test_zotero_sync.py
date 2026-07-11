@@ -46,10 +46,21 @@ def test_sync_indexes_local_pdf_once_and_then_marks_unchanged():
 
     with TemporaryDirectory(dir=".") as directory:
         pdf = Path(directory) / "study-A1.pdf"
-        pdf.write_bytes(b"pdf")
+        pdf.write_bytes(b"%PDF-test")
         first = sync_collection(_Zotero(), "COL1", directory, index, HashEmbedder(), fake_indexer)
         second = sync_collection(_Zotero(), "COL1", directory, index, HashEmbedder(), fake_indexer)
 
     assert first.indexed == ["A1"]
     assert second.unchanged == ["A1"]
     assert calls == [("P1", "study-A1.pdf")]
+
+
+def test_sync_treats_non_pdf_content_with_pdf_suffix_as_missing():
+    index = SQLiteIndex(":memory:")
+    with TemporaryDirectory(dir=".") as directory:
+        Path(directory, "study-A1.pdf").write_bytes(b"<html>not a PDF</html>")
+
+        report = sync_collection(_Zotero(), "COL1", directory, index, HashEmbedder())
+
+    assert report.indexed == []
+    assert report.missing_local_pdf == ["A1"]

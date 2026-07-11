@@ -122,9 +122,19 @@ def _find_local_pdf(
         keys.append(re.sub(r"[^A-Za-z0-9_-]+", "_", doi.lower()).strip("_"))
     for key in keys:
         exact = directory / f"{key}.pdf"
-        if exact.is_file():
+        if is_pdf_file(exact):
             return exact
         matches = sorted(directory.glob(f"*-{key}.pdf"))
-        if matches:
-            return matches[0]
+        for match in matches:
+            if is_pdf_file(match):
+                return match
     return None
+
+
+def is_pdf_file(path: str | Path) -> bool:
+    """Return whether a local file has a PDF header, not merely a .pdf suffix."""
+    try:
+        with Path(path).open("rb") as file:
+            return file.read(5) == b"%PDF-"
+    except OSError:
+        return False
