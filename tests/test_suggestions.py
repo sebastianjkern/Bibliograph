@@ -1,6 +1,11 @@
 from bibliograph.export import to_markdown
 from bibliograph.models import CitationSource, DraftMatch, Paper, TextChunk
-from bibliograph.suggestions import EvidenceSelection, GroundedTemplateGenerator, suggest_citations
+from bibliograph.suggestions import (
+    EvidenceSelection,
+    GroundedTemplateGenerator,
+    OpenAIEvidenceExtractor,
+    suggest_citations,
+)
 
 
 def _match() -> DraftMatch:
@@ -56,3 +61,38 @@ def test_suggestion_uses_only_verbatim_selected_evidence():
 
     assert selected.evidence == "Exact supporting sentence."
     assert rejected.evidence == "Evidence from page three"
+
+
+def test_evidence_extractor_sends_claim_source_and_context():
+    calls = []
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+
+            class Message:
+                content = (
+                    '{"supports_claim": true, "quote": "Evidence from page three", '
+                    '"rationale": "It supports the claim."}'
+                )
+
+            class Choice:
+                message = Message()
+
+            class Response:
+                choices = [Choice()]
+
+            return Response()
+
+    class Client:
+        chat = type("Chat", (), {"completions": Completions()})()
+
+    selection = OpenAIEvidenceExtractor("test-model", client=Client()).extract(
+        "The draft claim.", _match().sources[0], "Nearby context."
+    )
+
+    assert selection.supports_claim is True
+    assert calls[0]["model"] == "test-model"
+    user_message = calls[0]["messages"][1]["content"]
+    assert "The draft claim." in user_message
+    assert "Nearby context." in user_message

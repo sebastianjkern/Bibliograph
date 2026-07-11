@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .config import DEFAULT_OPENAI_API_KEY, DEFAULT_OPENAI_BASE_URL
+from .logging_utils import get_logger
 from .models import CitationSource, DraftMatch, TextChunk
+
+logger = get_logger("suggestions")
 
 
 @dataclass(frozen=True)
@@ -157,16 +160,47 @@ def suggest_citations(
             continue
         source = eligible[0]
         evidence = source.chunk.text
-        rationale = generator.explain(match.draft_text, evidence)
+        rationale = (
+            "Retrieved evidence overlaps with the draft passage; "
+            "verify the source before citing."
+        )
+        selected_rationale = ""
         if evidence_extractor is not None and context_provider is not None:
             try:
                 context = context_provider(source.chunk)
+                logger.info(
+                    "Requesting exact evidence from LLM for %s",
+                    source.chunk.paper.title,
+                )
                 selection = evidence_extractor.extract(match.draft_text, source, context)
                 if selection.supports_claim and selection.quote and selection.quote in context:
                     evidence = selection.quote
-                    rationale = selection.rationale or rationale
-            except Exception:
-                pass
+                    selected_rationale = selection.rationale
+                    logger.info(
+                        "LLM selected a supporting passage from %s",
+                        source.chunk.paper.title,
+                    )
+                else:
+                    logger.info(
+                        "LLM found no usable supporting passage for %s; using the retrieved chunk",
+                        source.chunk.paper.title,
+                    )
+            except Exception as error:
+                logger.warning(
+                    "Evidence extraction failed for %s; using the retrieved chunk: %s",
+                    source.chunk.paper.title,
+                    error,
+                )
+        try:
+            rationale = generator.explain(match.draft_text, evidence)
+        except Exception as error:
+            logger.warning(
+                "LLM rationale unavailable for %s; using deterministic rationale: %s",
+                source.chunk.paper.title,
+                error,
+            )
+        if selected_rationale:
+            rationale = selected_rationale
         suggestions.append(
             CitationSuggestion(
                 draft_text=match.draft_text,
