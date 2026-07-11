@@ -36,10 +36,10 @@ Bibliograph never downloads an entire Zotero collection automatically.
 
 ### Setup
 
-Install the package and the tools used by the complete workflow:
+Install the package and all tools used by the complete workflow:
 
 ```bash
-uv sync --extra dev --extra pdf --extra zotero --extra embeddings --extra llm --extra remote
+uv sync
 ```
 
 Copy the environment template:
@@ -171,13 +171,13 @@ To download from a remote source instead of a Zotero attachment, use a DOI:
 uv run bibliograph download-pdf --source remote --doi 10.1234/example --output-dir pdfs
 ```
 
-Remote downloads use `doidownloader`. It checks the DOI's publisher route, publisher metadata, known publisher PDF routes, and legally available open-access locations. This can use publisher access provided by your university network, but it does not bypass authentication or paywalls. Install the optional `remote` extra first; `doidownloader` requires Python 3.12 or newer.
+Remote downloads use `doidownloader`. It checks the DOI's publisher route, publisher metadata, known publisher PDF routes, and legally available open-access locations. This can use publisher access provided by your university network, but it does not bypass authentication or paywalls. Bibliograph requires Python 3.12 or newer because `doidownloader` is part of the main installation.
 
 If your default `uv` environment uses Python 3.11 or older, create the downloader environment explicitly:
 
 ```bash
 uv python install 3.12
-uv sync --python 3.12 --extra remote
+uv sync --python 3.12
 uv run --python 3.12 bibliograph download-pdf --source remote --doi 10.1234/example
 ```
 

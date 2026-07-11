@@ -6,20 +6,21 @@ build-backend = "setuptools.build_meta"
 name = "bibliograph"
 version = "0.1.0"
 description = "Semantic citation discovery for Zotero libraries and paper drafts"
-requires-python = ">=3.10"
-dependencies = ["sqlite-vec>=0.1.9"]
-
-[project.optional-dependencies]
-remote = [
-    "doidownloader>=0.1.0; python_version >= '3.12'",
+requires-python = ">=3.12"
+dependencies = [
+    "sqlite-vec>=0.1.9",
+    "doidownloader>=0.1.0",
     "pyDOI>=0.2.1",
+    "PyMuPDF>=1.24",
+    "pyzotero>=1.5",
+    "python-dotenv>=1.0",
+    "numpy>=1.26",
+    "openai>=1.40",
+    "sentence-transformers>=3.0",
+    "streamlit>=1.36",
+    "pytest>=8.0",
+    "ruff>=0.6",
 ]
-pdf = ["PyMuPDF>=1.24"]
-zotero = ["pyzotero>=1.5", "python-dotenv>=1.0"]
-embeddings = ["numpy>=1.26", "openai>=1.40", "sentence-transformers>=3.0"]
-llm = ["openai>=1.40"]
-ui = ["streamlit>=1.36"]
-dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
 bibliograph = "bibliograph.cli:main"
