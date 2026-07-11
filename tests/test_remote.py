@@ -122,6 +122,15 @@ def test_doidownloader_adapter_reads_pdf_content_from_lookup_result(monkeypatch)
     )
 
 
+def test_missing_doidownloader_explains_python_version_requirement(monkeypatch):
+    monkeypatch.setitem(__import__("sys").modules, "doidownloader", None)
+
+    from bibliograph.remote import _retrieve_with_doidownloader
+
+    with pytest.raises(ImportError, match="Python 3.12"):
+        _retrieve_with_doidownloader("10/example", None)
+
+
 def test_remote_download_exposes_manual_pydoi_hints(monkeypatch):
     monkeypatch.setattr(
         "bibliograph.remote._retrieve_with_doidownloader",

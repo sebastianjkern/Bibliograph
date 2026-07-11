@@ -173,6 +173,14 @@ uv run bibliograph download-pdf --source remote --doi 10.1234/example --output-d
 
 Remote downloads use `doidownloader`. It checks the DOI's publisher route, publisher metadata, known publisher PDF routes, and legally available open-access locations. This can use publisher access provided by your university network, but it does not bypass authentication or paywalls. Install the optional `remote` extra first; `doidownloader` requires Python 3.12 or newer.
 
+If your default `uv` environment uses Python 3.11 or older, create the downloader environment explicitly:
+
+```bash
+uv python install 3.12
+uv sync --python 3.12 --extra remote
+uv run --python 3.12 bibliograph download-pdf --source remote --doi 10.1234/example
+```
+
 If automatic retrieval fails, Bibliograph uses `pyDOI` to resolve the DOI and logs the publisher landing page and DOI URL as manual download hints. Open one of those URLs in a browser with your institutional access, save the PDF into `pdfs`, and rerun the check.
 
 ### Run the complete citation check

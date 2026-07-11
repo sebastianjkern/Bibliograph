@@ -161,7 +161,8 @@ def download_remote_pdf(
             raise RemoteDownloadError(
                 doi,
                 hints,
-                f"No PDF downloaded for {doi}. Open one of the manual download hints.",
+                f"No PDF downloaded for {doi}: {error}. "
+                "Open one of the manual download hints.",
             ) from error
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_bytes(content)
@@ -279,11 +280,17 @@ def _retrieve_with_doidownloader(doi: str, email: str | None) -> tuple[bytes, st
     try:
         from doidownloader import DOIDownloader
         from doidownloader.doidownloader import retrieve_best_fulltext
+    except ModuleNotFoundError as error:
+        if error.name == "doidownloader":
+            raise ImportError(
+                "doidownloader is not installed in the active Python environment. "
+                "It requires Python 3.12 or newer; use "
+                "'uv sync --python 3.12 --extra remote' and run with "
+                "'uv run --python 3.12 bibliograph ...'."
+            ) from error
+        raise ImportError(f"doidownloader is missing a runtime dependency: {error}") from error
     except ImportError as error:
-        raise ImportError(
-            "Remote downloads require the optional 'remote' extra: "
-            "uv sync --extra remote"
-        ) from error
+        raise ImportError(f"doidownloader could not be imported: {error}") from error
 
     async def retrieve() -> tuple[bytes, str]:
         async with DOIDownloader(email_address=email) as client:
