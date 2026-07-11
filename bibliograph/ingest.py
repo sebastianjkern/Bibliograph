@@ -3,8 +3,11 @@ from pathlib import Path
 
 from .chunking import chunk_pages
 from .embeddings import Embedder
+from .logging_utils import get_logger
 from .models import Paper
 from .store import SQLiteIndex
+
+logger = get_logger("ingest")
 
 
 def extract_pdf_pages(pdf_path: str | Path) -> list[tuple[int, str]]:
@@ -18,6 +21,7 @@ def extract_pdf_pages(pdf_path: str | Path) -> list[tuple[int, str]]:
     if not path.is_file():
         raise FileNotFoundError(path)
     with fitz.open(path) as document:
+        logger.debug("Extracting %d PDF pages from %s", len(document), path)
         return [
             (page_number + 1, page.get_text("text").strip())
             for page_number, page in enumerate(document)
@@ -46,7 +50,9 @@ def index_chunks(
 ) -> int:
     chunks = chunk_pages(paper, pages, max_words, overlap_words)
     if not chunks:
+        logger.warning("No text chunks extracted from %s", paper.title)
         return 0
+    logger.debug("Embedding %d chunks for %s", len(chunks), paper.title)
     embeddings = embedder.embed([chunk.text for chunk in chunks])
     return index.upsert(chunks, embeddings)
 

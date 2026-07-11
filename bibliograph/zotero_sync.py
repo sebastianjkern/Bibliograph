@@ -6,7 +6,10 @@ from typing import Any
 
 from .embeddings import Embedder
 from .ingest import index_pdf, paper_from_zotero_item
+from .logging_utils import get_logger
 from .store import SQLiteIndex
+
+logger = get_logger("sync")
 
 
 @dataclass
@@ -39,7 +42,9 @@ def sync_collection(
     so callers can resolve them even when attachment keys are unavailable.
     """
     report = SyncReport()
-    for item in zotero.everything(zotero.collection_items(collection_key)):
+    items = zotero.everything(zotero.collection_items(collection_key))
+    logger.info("Found %d Zotero items in collection", len(items))
+    for item in items:
         item_data = item.get("data", {})
         item_key = item_data.get("key")
         item_type = item_data.get("itemType", "")
@@ -61,6 +66,7 @@ def sync_collection(
             report.missing_papers.append(
                 MissingPaper(item_key, item_data.get("title", "Untitled"), item_data.get("DOI"))
             )
+            logger.info("Missing PDF: %s", item_data.get("title", "Untitled"))
             continue
         missing_keys: list[str] = []
         for attachment in attachments:
@@ -73,6 +79,7 @@ def sync_collection(
             if local_path is None:
                 report.missing_local_pdf.append(attachment_key)
                 missing_keys.append(attachment_key)
+                logger.info("Missing local PDF: %s", item_data.get("title", "Untitled"))
                 continue
             version = attachment_data.get("version")
             if not index.needs_file_index(attachment_key, version, str(local_path)):

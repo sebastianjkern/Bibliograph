@@ -8,6 +8,10 @@ from typing import Protocol
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from .logging_utils import get_logger
+
+logger = get_logger("remote")
+
 
 @dataclass(frozen=True)
 class RemoteCandidate:
@@ -32,6 +36,7 @@ class UnpaywallResolver:
         self.api_base_url = api_base_url.rstrip("/")
 
     def resolve(self, doi: str) -> Sequence[RemoteCandidate]:
+        logger.debug("Querying Unpaywall for %s", doi)
         record = _get_json(
             f"{self.api_base_url}/{quote(_normalize_doi(doi), safe='')}",
             {"email": self.email},
@@ -57,6 +62,7 @@ class OpenAlexResolver:
         self.api_base_url = api_base_url.rstrip("/")
 
     def resolve(self, doi: str) -> Sequence[RemoteCandidate]:
+        logger.debug("Querying OpenAlex for %s", doi)
         record = _get_json(
             f"{self.api_base_url}/https://doi.org/{quote(_normalize_doi(doi), safe='')}",
             {"api_key": self.api_key},
@@ -84,12 +90,14 @@ class ResolverChain:
     def resolve(self, doi: str) -> list[RemoteCandidate]:
         candidates: list[RemoteCandidate] = []
         for resolver in self.resolvers:
+            logger.debug("Trying remote resolver: %s", resolver.name)
             try:
                 resolved = resolver.resolve(doi)
             except (OSError, ValueError):
                 continue
             for candidate in resolved:
                 _validate_candidate(candidate)
+                logger.debug("Resolver %s returned %s", resolver.name, candidate.url)
                 if candidate.url not in {item.url for item in candidates}:
                     candidates.append(candidate)
         return candidates
@@ -122,6 +130,7 @@ def download_remote_pdf(
         )
     )
     candidates = chain.resolve(doi)
+    logger.info("Found %d legal remote PDF candidates for %s", len(candidates), doi)
     if not candidates:
         raise FileNotFoundError(f"No legal open-access PDF location found for DOI {doi}")
 
@@ -133,8 +142,10 @@ def download_remote_pdf(
                 str(filepath), False, candidate.url, candidate.resolver, candidate.legal_basis
             )
         try:
+            logger.info("Downloading PDF via %s: %s", candidate.resolver, candidate.url)
             content = _get_pdf(candidate.url)
         except (OSError, ValueError):
+            logger.warning("Remote PDF candidate failed: %s", candidate.url)
             continue
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_bytes(content)

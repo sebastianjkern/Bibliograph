@@ -7,6 +7,7 @@ from .drafts import parse_draft_file
 from .embeddings import HashEmbedder, OpenAICompatibleEmbedder, SentenceTransformerEmbedder
 from .export import to_markdown
 from .ingest import index_pdf
+from .logging_utils import configure_logging, get_logger
 from .models import Paper
 from .reranker import HeuristicReranker, OpenAIReranker, rerank_matches
 from .retrieval import find_citations, find_claim_citations
@@ -17,6 +18,13 @@ from .zotero_sync import MissingPaper, sync_collection
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Find citation evidence in a local paper library.")
+    parser.add_argument(
+        "--log-level",
+        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+        default="INFO",
+        help="Console logging level (default: INFO)",
+    )
+    parser.add_argument("--quiet", action="store_true", help="Disable console progress logging")
     parser.add_argument("--db", default="bibliograph.db", help="SQLite index path")
     parser.add_argument(
         "--embedding-provider",
@@ -125,7 +133,11 @@ def _embedder(
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    configure_logging(args.log_level, args.quiet)
+    logger = get_logger("cli")
+    logger.info("Command: %s", args.command)
     if args.command == "download-pdf":
+        logger.info("Downloading one PDF from %s", args.source)
         if args.source == "remote":
             if not args.doi:
                 raise ValueError("Remote downloads require --doi")
@@ -150,9 +162,11 @@ def main(argv: list[str] | None = None) -> int:
                 args.title,
             )
         status = "Downloaded" if result.downloaded else "Already present"
+        logger.info("%s PDF: %s", status, result.path)
         print(f"{status}: {result.path}")
         return 0
 
+    logger.info("Loading %s embedding backend", args.embedding_provider)
     embedder = _embedder(
         args.embedding_provider,
         args.model,
@@ -161,10 +175,13 @@ def main(argv: list[str] | None = None) -> int:
         args.embedding_offline,
     )
     index = SQLiteIndex(args.db)
+    logger.info("Using persistent vector index: %s", args.db)
     try:
         if args.command == "index-pdf":
             paper = Paper(args.key, args.title, tuple(args.author), args.year, args.doi)
+            logger.info("Extracting and indexing PDF: %s", args.pdf)
             count = index_pdf(index, embedder, paper, args.pdf)
+            logger.info("Indexed %d chunks from %s", count, args.pdf)
             print(f"Indexed {count} chunks from {args.pdf}")
             return 0
 
@@ -172,12 +189,24 @@ def main(argv: list[str] | None = None) -> int:
             from connections.reload_embeddings import find_collection_key, load_zotero_client
 
             zotero = load_zotero_client()
+            logger.info("Resolving Zotero collection: %s", args.collection)
             collection_key = find_collection_key(zotero, args.collection)
+            logger.info("Synchronizing collection %s", collection_key)
             report = sync_collection(
                 zotero, collection_key, args.pdf_dir, index, embedder
             )
+            logger.info(
+                "Sync complete: %d indexed, %d unchanged, %d missing",
+                len(report.indexed),
+                len(report.unchanged),
+                len(report.missing_papers),
+            )
             downloaded: list[str] = []
             if args.download_missing:
+                logger.info(
+                    "Downloading missing PDFs through the %s backend",
+                    args.download_source,
+                )
                 from connections.reload_embeddings import download_pdf_for_item
 
                 from .remote import download_remote_pdf
@@ -204,12 +233,16 @@ def main(argv: list[str] | None = None) -> int:
                                 else None,
                             )
                     except (FileNotFoundError, ValueError):
+                        logger.warning("Could not download missing paper: %s", missing.title)
                         continue
                     downloaded.append(result.path)
+                    logger.info("Downloaded: %s", result.path)
                 if downloaded:
+                    logger.info("Re-synchronizing downloaded PDFs")
                     report = sync_collection(
                         zotero, collection_key, args.pdf_dir, index, embedder
                     )
+            logger.info("Parsing draft and retrieving claim evidence: %s", args.draft)
             matches = find_claim_citations(
                 parse_draft_file(args.draft),
                 index,
@@ -218,6 +251,7 @@ def main(argv: list[str] | None = None) -> int:
                 min_score=args.min_score,
             )
             if not args.no_rerank:
+                logger.info("Reranking evidence with LLM model: %s", args.llm_model)
                 try:
                     matches = rerank_matches(
                         matches,
@@ -228,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
                         ),
                     )
                 except Exception as error:
-                    print(f"LLM reranking unavailable; using retrieval order: {error}")
+                    logger.warning("LLM reranking unavailable; using retrieval order: %s", error)
                     matches = rerank_matches(matches, HeuristicReranker())
             else:
                 matches = rerank_matches(matches, HeuristicReranker())
@@ -244,10 +278,13 @@ def main(argv: list[str] | None = None) -> int:
             output = summary + "\n" + output
             if args.output:
                 args.output.write_text(output, encoding="utf-8")
+                logger.info("Wrote report: %s", args.output)
             else:
+                logger.info("Writing report to console")
                 print(output)
             return 0
 
+        logger.info("Retrieving citations from draft: %s", args.draft)
         matches = find_citations(
             args.draft.read_text(encoding="utf-8"),
             index,
@@ -264,11 +301,15 @@ def main(argv: list[str] | None = None) -> int:
                     os.getenv("OPENAI_BASE_URL"),
                 )
             except Exception as error:
-                print(f"LLM suggestions unavailable; using deterministic rationales: {error}")
+                logger.warning(
+                    "LLM suggestions unavailable; using deterministic rationales: %s", error
+                )
         output = to_markdown(suggest_citations(matches, generator, args.min_score))
         if args.output:
             args.output.write_text(output, encoding="utf-8")
+            logger.info("Wrote report: %s", args.output)
         else:
+            logger.info("Writing report to console")
             print(output)
         return 0
     finally:
