@@ -97,10 +97,16 @@ ZOTERO_API_KEY=<your_api_key>
 Download a single parent item’s first PDF attachment. If that attachment is already present locally, nothing is downloaded:
 
 ```bash
-bibliograph download-pdf PARENT_ITEM_KEY --output-dir pdfs
+bibliograph download-pdf --doi 10.1234/example --output-dir pdfs
 ```
 
-If the parent has several PDFs, select one explicitly with `--attachment-key`. This command never enumerates or downloads an entire collection.
+You can also use an exact title:
+
+```bash
+bibliograph download-pdf --title "Paper title" --output-dir pdfs
+```
+
+The parent item key remains available as an optional advanced identifier. If the parent has several PDFs, select one explicitly with `--attachment-key`. This command never enumerates or downloads an entire collection.
 
 ### Run the original sentence-level prototype
 

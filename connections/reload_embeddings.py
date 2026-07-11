@@ -80,6 +80,49 @@ def find_pdf_attachment_ids(zot: Any, item_key: str, item_type: str) -> list[str
     return pdf_keys
 
 
+def resolve_item_key(
+    zot: Any,
+    item_key: str | None = None,
+    doi: str | None = None,
+    title: str | None = None,
+) -> str:
+    """Resolve a user-friendly DOI or title to one Zotero parent key."""
+    identifiers = [value for value in (item_key, doi, title) if value]
+    if len(identifiers) != 1:
+        raise ValueError("Provide exactly one of item_key, doi, or title")
+    if item_key:
+        return item_key
+
+    query = doi or title
+    candidates = [
+        item.get("data", {})
+        for item in zot.everything(zot.items(q=query))
+        if item.get("data", {}).get("itemType") != "attachment"
+    ]
+    if doi:
+        wanted_doi = _normalize_doi(doi)
+        candidates = [
+            item for item in candidates if _normalize_doi(item.get("DOI", "")) == wanted_doi
+        ]
+    else:
+        wanted_title = title.strip().casefold()
+        candidates = [
+            item
+            for item in candidates
+            if item.get("title", "").strip().casefold() == wanted_title
+        ]
+    if len(candidates) == 1:
+        return candidates[0].get("key", "")
+    if not candidates:
+        raise ValueError(f"No Zotero item found for {doi or title!r}")
+    descriptions = ", ".join(item.get("key", "unknown") for item in candidates[:5])
+    raise ValueError(f"Multiple Zotero items matched; use an exact DOI or item key: {descriptions}")
+
+
+def _normalize_doi(value: str) -> str:
+    return value.strip().lower().removeprefix("https://doi.org/").removeprefix("doi:").strip()
+
+
 def safe_filename(name: str) -> str:
     """Generate a filesystem-safe filename from a string."""
     cleaned = "".join(c for c in name if c.isalnum() or c in " ._-()").strip()
@@ -116,9 +159,11 @@ def find_local_pdf(output_dir: str, attachment_key: str) -> Path | None:
 
 
 def download_pdf_for_item(
-    item_key: str,
+    item_key: str | None = None,
     output_dir: str = "pdfs",
     attachment_key: str | None = None,
+    doi: str | None = None,
+    title: str | None = None,
 ) -> DownloadResult:
     """Download one PDF attachment for one Zotero item, only if it is not local.
 
@@ -126,9 +171,8 @@ def download_pdf_for_item(
     multiple PDF attachments, pass ``attachment_key`` to select one explicitly;
     otherwise only the first PDF attachment is considered.
     """
-    if not item_key:
-        raise ValueError("item_key must not be empty")
     zot = load_zotero_client()
+    item_key = resolve_item_key(zot, item_key, doi, title)
     item = zot.item(item_key)
     item_data = item.get("data", {})
     attachment_keys = find_pdf_attachment_ids(
@@ -155,7 +199,7 @@ def download_pdfs_for_collection(
 ) -> list[str]:
     """Prevent accidental collection-wide downloads."""
     raise RuntimeError(
-        "Collection-wide PDF downloads are disabled; use download_pdf_for_item(item_key)"
+        "Collection-wide PDF downloads are disabled; use the single-item downloader"
     )
 
 
@@ -163,7 +207,10 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Download one missing PDF from Zotero.")
-    parser.add_argument("item_key", help="Zotero parent item or attachment key")
+    parser.add_argument("item_key", nargs="?", help="Optional Zotero parent item or attachment key")
+    identifier = parser.add_mutually_exclusive_group()
+    identifier.add_argument("--doi", help="Resolve the Zotero item by DOI")
+    identifier.add_argument("--title", help="Resolve the Zotero item by exact title")
     parser.add_argument("--attachment-key", help="Select one PDF when there are several")
     parser.add_argument(
         "--output-dir",
@@ -172,6 +219,12 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    result = download_pdf_for_item(args.item_key, args.output_dir, args.attachment_key)
+    result = download_pdf_for_item(
+        args.item_key,
+        args.output_dir,
+        args.attachment_key,
+        args.doi,
+        args.title,
+    )
     status = "Downloaded" if result.downloaded else "Already present"
     print(f"{status}: {result.path}")

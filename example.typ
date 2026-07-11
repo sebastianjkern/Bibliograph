@@ -1,0 +1,4 @@
+= Background
+
+Bayesian methods improve uncertainty estimates in small-data settings.
+This claim should be supported by a paper in the Zotero collection.

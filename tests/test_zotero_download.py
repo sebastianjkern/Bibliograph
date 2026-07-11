@@ -3,7 +3,11 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-from connections.reload_embeddings import download_pdf_for_item, download_pdfs_for_collection
+from connections.reload_embeddings import (
+    download_pdf_for_item,
+    download_pdfs_for_collection,
+    resolve_item_key,
+)
 
 
 class _Zotero:
@@ -37,6 +41,21 @@ class _Zotero:
         self.downloads += 1
         return b"%PDF-test"
 
+    def items(self, q):
+        return [
+            {
+                "data": {
+                    "key": "PARENT",
+                    "itemType": "journalArticle",
+                    "title": "A Study",
+                    "DOI": "10/example",
+                }
+            }
+        ]
+
+    def everything(self, request):
+        return request
+
 
 def test_download_pdf_for_item_skips_existing_attachment(monkeypatch):
     zotero = _Zotero()
@@ -60,6 +79,12 @@ def test_download_pdf_for_item_downloads_one_missing_attachment(monkeypatch):
         assert result.downloaded is True
         assert Path(result.path).is_file()
         assert zotero.downloads == 1
+
+
+def test_resolve_item_key_by_doi_or_title():
+    zotero = _Zotero()
+    assert resolve_item_key(zotero, doi="https://doi.org/10/example") == "PARENT"
+    assert resolve_item_key(zotero, title="a study") == "PARENT"
 
 
 def test_collection_downloads_are_disabled():

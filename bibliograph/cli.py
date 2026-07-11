@@ -40,7 +40,12 @@ def build_parser() -> argparse.ArgumentParser:
     download = subparsers.add_parser(
         "download-pdf", help="Download one missing PDF attachment from Zotero"
     )
-    download.add_argument("item_key", help="Zotero parent item or attachment key")
+    download.add_argument(
+        "item_key", nargs="?", help="Optional Zotero parent item or attachment key"
+    )
+    identifier = download.add_mutually_exclusive_group()
+    identifier.add_argument("--doi", help="Resolve the Zotero item by DOI")
+    identifier.add_argument("--title", help="Resolve the Zotero item by exact title")
     download.add_argument("--attachment-key", help="Select one PDF when the item has several")
     download.add_argument("--output-dir", type=Path, default=Path("pdfs"))
 
@@ -81,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
             args.item_key,
             str(args.output_dir),
             args.attachment_key,
+            args.doi,
+            args.title,
         )
         status = "Downloaded" if result.downloaded else "Already present"
         print(f"{status}: {result.path}")
