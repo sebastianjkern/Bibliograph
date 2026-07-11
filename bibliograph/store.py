@@ -189,7 +189,10 @@ class SQLiteIndex:
         return row[0] if row else None
 
     def _has_index_data(self) -> bool:
-        return self.connection.execute("SELECT 1 FROM chunks LIMIT 1").fetchone() is not None
+        return any(
+            self.connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is not None
+            for table in ("chunks", "indexed_files", "vector_meta")
+        )
 
     def _set_embedding_id(self, embedding_id: str) -> None:
         row = self.connection.execute("SELECT 1 FROM vector_meta LIMIT 1").fetchone()
