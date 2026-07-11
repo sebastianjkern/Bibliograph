@@ -1,3 +1,5 @@
+![Bibliograph-Banner](./github-banner.svg)
+
 # Bibliograph
 
 Bibliograph is a local citation discovery assistant. It indexes papers from a Zotero-backed library, scans draft passages for semantic matches, and returns evidence-backed citation suggestions.

@@ -1,61 +1,58 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
-  <title id="title">Bibliograph — organize, cite, discover</title>
-  <desc id="desc">A dark indigo GitHub banner with a stylized open book, citation marks, and the Bibliograph wordmark.</desc>
-
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#111827"/>
-      <stop offset="0.58" stop-color="#18233d"/>
-      <stop offset="1" stop-color="#312e81"/>
-    </linearGradient>
-    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#818cf8" stop-opacity=".38"/>
-      <stop offset="1" stop-color="#a5b4fc" stop-opacity="0"/>
-    </linearGradient>
-    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#f8fafc"/>
-      <stop offset="1" stop-color="#c7d2fe"/>
-    </linearGradient>
-    <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
-      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#020617" flood-opacity=".42"/>
-    </filter>
-    <pattern id="grid" width="44" height="44" patternUnits="userSpaceOnUse">
-      <path d="M44 0H0V44" fill="none" stroke="#c7d2fe" stroke-opacity=".065"/>
-    </pattern>
-  </defs>
-
-  <rect width="1280" height="640" rx="28" fill="url(#bg)"/>
-  <circle cx="1080" cy="72" r="310" fill="url(#glow)"/>
-  <rect x="28" y="28" width="1224" height="584" rx="20" fill="url(#grid)"/>
-
-  <!-- quiet citation constellation -->
-  <g fill="none" stroke="#a5b4fc" stroke-opacity=".35" stroke-width="2">
-    <path d="M886 142L1015 104L1132 178L1181 302L1088 407L951 376L886 142Z"/>
-    <path d="M1015 104L1088 407M1132 178L951 376M886 142L1181 302"/>
-  </g>
-  <g fill="#c7d2fe">
-    <circle cx="886" cy="142" r="5"/><circle cx="1015" cy="104" r="5"/><circle cx="1132" cy="178" r="5"/>
-    <circle cx="1181" cy="302" r="5"/><circle cx="1088" cy="407" r="5"/><circle cx="951" cy="376" r="5"/>
-  </g>
-
-  <!-- open book mark -->
-  <g filter="url(#shadow)" transform="translate(804 164)">
-    <path d="M0 62C58 25 121 28 178 66V306C119 270 59 270 0 305Z" fill="url(#paper)"/>
-    <path d="M178 66C235 28 298 25 356 62V305C297 270 237 270 178 306Z" fill="#e0e7ff"/>
-    <path d="M178 66V306" stroke="#6366f1" stroke-width="7" stroke-linecap="round"/>
-    <path d="M37 105C79 84 117 86 151 104M37 139C79 118 117 120 151 138M37 173C79 152 117 154 151 172M205 104C239 86 277 84 319 105M205 138C239 120 277 118 319 139M205 172C239 154 277 152 319 173" fill="none" stroke="#6366f1" stroke-opacity=".52" stroke-width="8" stroke-linecap="round"/>
-    <path d="M288 70V151L311 132L334 151V58" fill="#818cf8"/>
-  </g>
-
-  <g transform="translate(112 162)">
-    <text x="0" y="30" fill="#a5b4fc" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="700" letter-spacing="5">OPEN YOUR SOURCES</text>
-    <text x="0" y="138" fill="#f8fafc" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="90" font-weight="750" letter-spacing="-4">Bibliograph</text>
-    <rect x="2" y="177" width="90" height="6" rx="3" fill="#818cf8"/>
-    <text x="0" y="243" fill="#c7d2fe" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="31" font-weight="500">Organize. Cite. Discover.</text>
-    <text x="0" y="307" fill="#94a3b8" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="20">A calm place for the ideas that move your work forward.</text>
-  </g>
-
-  <g transform="translate(112 521)" fill="#94a3b8" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="16" letter-spacing="2">
-    <text>READ DEEPLY</text><circle cx="145" cy="-6" r="3" fill="#818cf8"/><text x="165">THINK CLEARLY</text><circle cx="332" cy="-6" r="3" fill="#818cf8"/><text x="352">BUILD KNOWLEDGE</text>
-  </g>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="100%" height="100%" viewBox="0 0 1280 640" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;">
+    <path d="M1280,28L1280,612C1280,627.454 1267.454,640 1252,640L28,640C12.546,640 0,627.454 0,612L0,28C0,12.546 12.546,0 28,0L1252,0C1267.454,0 1280,12.546 1280,28Z" style="fill:url(#_Linear1);"/>
+    <circle cx="1080" cy="72" r="310" style="fill:url(#_Linear2);"/>
+    <path d="M1252,48L1252,592C1252,603.038 1243.038,612 1232,612L48,612C36.962,612 28,603.038 28,592L28,48C28,36.962 36.962,28 48,28L1232,28C1243.038,28 1252,36.962 1252,48Z" style="fill:none;"/>
+    <g>
+        <path d="M886,142L1015,104L1132,178L1181,302L1088,407L951,376L886,142Z" style="fill:none;fill-rule:nonzero;stroke:rgb(165,180,252);stroke-opacity:0.35;stroke-width:2px;"/>
+        <path d="M1015,104L1088,407M1132,178L951,376M886,142L1181,302" style="fill:none;fill-rule:nonzero;stroke:rgb(165,180,252);stroke-opacity:0.35;stroke-width:2px;"/>
+    </g>
+    <g>
+        <circle cx="886" cy="142" r="5" style="fill:rgb(199,210,254);"/>
+        <circle cx="1015" cy="104" r="5" style="fill:rgb(199,210,254);"/>
+        <circle cx="1132" cy="178" r="5" style="fill:rgb(199,210,254);"/>
+        <circle cx="1181" cy="302" r="5" style="fill:rgb(199,210,254);"/>
+        <circle cx="1088" cy="407" r="5" style="fill:rgb(199,210,254);"/>
+        <circle cx="951" cy="376" r="5" style="fill:rgb(199,210,254);"/>
+    </g>
+    <g transform="matrix(1,0,0,1,804,164)">
+        <path d="M0,62C58,25 121,28 178,66L178,306C119,270 59,270 0,305L0,62Z" style="fill:url(#_Linear3);fill-rule:nonzero;"/>
+        <path d="M178,66C235,28 298,25 356,62L356,305C297,270 237,270 178,306L178,66Z" style="fill:rgb(224,231,255);fill-rule:nonzero;"/>
+        <path d="M178,66L178,306" style="fill:none;fill-rule:nonzero;stroke:rgb(99,102,241);stroke-width:7px;stroke-linecap:round;"/>
+        <path d="M37,105C79,84 117,86 151,104M37,139C79,118 117,120 151,138M37,173C79,152 117,154 151,172M205,104C239,86 277,84 319,105M205,138C239,120 277,118 319,139M205,172C239,154 277,152 319,173" style="fill:none;fill-rule:nonzero;stroke:rgb(99,102,241);stroke-opacity:0.52;stroke-width:8px;stroke-linecap:round;"/>
+        <path d="M288,70L288,151L311,132L334,151L334,58" style="fill:rgb(129,140,248);fill-rule:nonzero;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,112,162)">
+        <g transform="matrix(1,0,0,1,0,138)">
+            <text x="0px" y="0px" style="font-family:'Arial-BoldMT', 'Arial', sans-serif;font-weight:700;font-size:90px;fill:rgb(248,250,252);">B<tspan x="61.395px 82.8px 134.176px 155.58px 176.985px 228.361px 279.737px 311.161px 357.615px 408.99px " y="0px 0px 0px 0px 0px 0px 0px 0px 0px 0px ">ibliograph</tspan></text>
+        </g>
+        <path d="M92,180C92,181.656 90.656,183 89,183L5,183C3.344,183 2,181.656 2,180C2,178.344 3.344,177 5,177L89,177C90.656,177 92,178.344 92,180Z" style="fill:rgb(129,140,248);"/>
+        <g transform="matrix(1,0,0,1,0,243)">
+            <text x="0px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:31px;fill:rgb(199,210,254);">Organize. Cite. Discover<tspan x="334.234px " y="0px ">.</tspan></text>
+        </g>
+        <g transform="matrix(1,0,0,1,0,307)">
+            <text x="0px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:20px;fill:rgb(148,163,184);">A<tspan x="12.236px 17.793px " y="0px 0px "> c</tspan>alm place for the ideas that move your work forward.</text>
+        </g>
+    </g>
+    <g transform="matrix(1,0,0,1,112,521)">
+        <text x="0px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:16px;fill:rgb(148,163,184);">R<tspan x="11.875px 22.867px 33.858px 45.733px 50.498px 62.373px 73.365px 84.357px 95.349px 103.38px " y="0px 0px 0px 0px 0px 0px 0px 0px 0px 0px ">EAD DEEPLY</tspan></text>
+        <g transform="matrix(1,0,0,1,-3.573325,0)">
+            <circle cx="145" cy="-6" r="3" style="fill:rgb(129,140,248);"/>
+        </g>
+        <g transform="matrix(1,0,0,1,168.551787,0.698187)">
+            <text x="0px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:16px;fill:rgb(148,163,184);">T<tspan x="10.093px 21.968px 26.733px 38.608px 49.6px 54.365px 66.24px 75.458px 86.45px 97.442px 109.317px 117.348px " y="0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px ">HINK CLEARLY</tspan></text>
+        </g>
+        <g transform="matrix(1,0,0,1,-8.053413,0)">
+            <circle cx="332" cy="-6" r="3" style="fill:rgb(129,140,248);"/>
+        </g>
+        <g transform="matrix(1,0,0,1,350.274824,0.698187)">
+            <text x="0px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:16px;fill:rgb(148,163,184);">B<tspan x="10.992px 22.867px 27.632px 36.85px 48.725px 53.49px 64.482px 76.357px 89.122px 104.544px 113.762px 124.754px 136.629px 149.394px " y="0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px ">UILD KNOWLEDGE</tspan></text>
+        </g>
+    </g>
+    <defs>
+        <linearGradient id="_Linear1" x1="0" y1="0" x2="1" y2="0" gradientUnits="userSpaceOnUse" gradientTransform="matrix(1280,640,-640,1280,0,0)"><stop offset="0" style="stop-color:rgb(17,24,39);stop-opacity:1"/><stop offset="0.58" style="stop-color:rgb(24,35,61);stop-opacity:1"/><stop offset="1" style="stop-color:rgb(49,46,129);stop-opacity:1"/></linearGradient>
+        <linearGradient id="_Linear2" x1="0" y1="0" x2="1" y2="0" gradientUnits="userSpaceOnUse" gradientTransform="matrix(620,620,-620,620,770,-238)"><stop offset="0" style="stop-color:rgb(129,140,248);stop-opacity:0.38"/><stop offset="1" style="stop-color:rgb(165,180,252);stop-opacity:0"/></linearGradient>
+        <linearGradient id="_Linear3" x1="0" y1="0" x2="1" y2="0" gradientUnits="userSpaceOnUse" gradientTransform="matrix(178,270.186187,-270.186187,178,0,35.813813)"><stop offset="0" style="stop-color:rgb(248,250,252);stop-opacity:1"/><stop offset="1" style="stop-color:rgb(199,210,254);stop-opacity:1"/></linearGradient>
+    </defs>
 </svg>
