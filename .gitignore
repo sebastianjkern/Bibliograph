@@ -14,3 +14,8 @@ __pycache__/
 
 # Ignore all VS Code configuration files
 .vscode/
+
+# Build and local development artifacts
+*.egg-info/
+.venv/
+bibliograph.db
