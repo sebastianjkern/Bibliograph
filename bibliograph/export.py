@@ -9,6 +9,7 @@ def to_markdown(suggestions: Iterable[CitationSuggestion]) -> str:
         lines.extend(
             [
                 f"## {suggestion.citation}",
+                f"Support score: {suggestion.source.score:.2f}",
                 f"> Draft: {suggestion.draft_text}",
                 f"> Evidence: {suggestion.evidence}",
                 "",

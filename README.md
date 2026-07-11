@@ -67,6 +67,17 @@ Set `OPENAI_API_KEY`, `OPENAI_EMBEDDING_MODEL`, and optionally `OPENAI_BASE_URL`
 bibliograph suggest draft.txt --output suggestions.md
 ```
 
+### Check a draft against a Zotero collection
+
+This is the end-to-end workflow. It syncs one selected collection’s metadata, indexes only local PDFs that are new or changed, parses a Typst or LaTeX draft into claims, retrieves hybrid matches, and optionally reranks them with an LLM:
+
+```bash
+bibliograph check paper.tex "My Collection" \
+  --pdf-dir pdfs --llm-model local-reranker --output citation-check.md
+```
+
+The command does not download PDFs. Missing attachment keys are listed in the report; download one explicitly with `bibliograph download-pdf KEY`, then rerun the check.
+
 For grounded LLM rationales, set `OPENAI_API_KEY` and pass an OpenAI-compatible chat model:
 
 ```bash

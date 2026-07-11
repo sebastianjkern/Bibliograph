@@ -2,13 +2,16 @@ import argparse
 import os
 from pathlib import Path
 
+from .drafts import parse_draft_file
 from .embeddings import HashEmbedder, OpenAICompatibleEmbedder, SentenceTransformerEmbedder
 from .export import to_markdown
 from .ingest import index_pdf
 from .models import Paper
-from .retrieval import find_citations
+from .reranker import HeuristicReranker, OpenAIReranker, rerank_matches
+from .retrieval import find_citations, find_claim_citations
 from .store import SQLiteIndex
 from .suggestions import OpenAISuggestionGenerator, suggest_citations
+from .zotero_sync import sync_collection
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,6 +50,17 @@ def build_parser() -> argparse.ArgumentParser:
     suggest.add_argument("--min-score", type=float, default=0.0)
     suggest.add_argument("--output", type=Path)
     suggest.add_argument("--llm-model", help="Optional chat model for grounded rationales")
+
+    check = subparsers.add_parser(
+        "check", help="Sync one Zotero collection and check a Typst/LaTeX draft"
+    )
+    check.add_argument("draft", type=Path)
+    check.add_argument("collection", help="Zotero collection key or exact name")
+    check.add_argument("--pdf-dir", type=Path, default=Path("pdfs"))
+    check.add_argument("--limit", type=int, default=5)
+    check.add_argument("--min-score", type=float, default=0.0)
+    check.add_argument("--output", type=Path)
+    check.add_argument("--llm-model", help="Optional chat model for evidence reranking")
     return parser
 
 
@@ -79,6 +93,45 @@ def main(argv: list[str] | None = None) -> int:
             paper = Paper(args.key, args.title, tuple(args.author), args.year, args.doi)
             count = index_pdf(index, embedder, paper, args.pdf)
             print(f"Indexed {count} chunks from {args.pdf}")
+            return 0
+
+        if args.command == "check":
+            from connections.reload_embeddings import find_collection_key, load_zotero_client
+
+            zotero = load_zotero_client()
+            collection_key = find_collection_key(zotero, args.collection)
+            report = sync_collection(
+                zotero, collection_key, args.pdf_dir, index, embedder
+            )
+            matches = find_claim_citations(
+                parse_draft_file(args.draft),
+                index,
+                embedder,
+                limit=args.limit,
+                min_score=args.min_score,
+            )
+            if args.llm_model:
+                api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    raise RuntimeError("OPENAI_API_KEY is required when --llm-model is used")
+                matches = rerank_matches(
+                    matches,
+                    OpenAIReranker(args.llm_model, api_key, os.getenv("OPENAI_BASE_URL")),
+                )
+            else:
+                matches = rerank_matches(matches, HeuristicReranker())
+            output = to_markdown(suggest_citations(matches))
+            summary = (
+                f"Indexed: {len(report.indexed)} | Unchanged: {len(report.unchanged)} | "
+                f"Missing local PDFs: {len(report.missing_local_pdf)}\n"
+            )
+            if report.missing_local_pdf:
+                summary += "Missing attachment keys: " + ", ".join(report.missing_local_pdf) + "\n"
+            output = summary + "\n" + output
+            if args.output:
+                args.output.write_text(output, encoding="utf-8")
+            else:
+                print(output)
             return 0
 
         matches = find_citations(
