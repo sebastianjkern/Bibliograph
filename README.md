@@ -84,6 +84,33 @@ This claim should be supported by a paper in the Zotero collection.
 
 Existing LaTeX citations such as `\\citep{smith2022}` and Typst citations such as `@smith2022` are preserved in the parsed claim metadata.
 
+### Quick-start examples
+
+After configuring Zotero and creating `example.tex`, run the complete workflow with the defaults:
+
+```bash
+uv run bibliograph check example.tex "My Collection"
+```
+
+This uses the cached SentenceTransformer embedding model, the `pdfs` directory, the persistent `bibliograph.db` index, remote PDF downloads for missing DOI papers, LLM reranking with `qwen/qwen3-1.7b` when available, and prints the report to the console. Add `--output citation-check.md` when you want to save the report.
+
+To index a PDF that is already on disk and then search a draft:
+
+```bash
+uv run bibliograph index-pdf paper.pdf --key PAPER1 --title "Paper title"
+uv run bibliograph suggest example.tex
+```
+
+For a fully local setup with LM Studio, start its local server, load `qwen/qwen3-1.7b` and `text-embedding-nomic-embed-text-v1.5`, then run:
+
+```bash
+uv run bibliograph --embedding-provider openai \
+  --model text-embedding-nomic-embed-text-v1.5 \
+  check example.tex "My Collection" --llm-model qwen/qwen3-1.7b
+```
+
+The default LM Studio endpoint is `http://localhost:1234/v1`; set `OPENAI_BASE_URL` if the server uses another URL. The default API key value is `lm-studio`, so no real OpenAI key is needed for this local setup.
+
 ### Choose an embedding backend
 
 The default backend is the cached `all-MiniLM-L6-v2` SentenceTransformer model. Its first use downloads the model; later runs reuse the local cache. For a dependency-free deterministic smoke test, explicitly select the hash backend:
