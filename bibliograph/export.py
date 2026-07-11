@@ -5,20 +5,41 @@ from .suggestions import CitationSuggestion
 
 
 def to_markdown(suggestions: Iterable[CitationSuggestion]) -> str:
-    lines = ["# Citation suggestions", ""]
-    for suggestion in suggestions:
+    suggestions = list(suggestions)
+    lines = ["# Citation suggestions", "", f"Found {len(suggestions)} suggestion(s).", ""]
+    for number, suggestion in enumerate(suggestions, start=1):
+        paper = suggestion.source.chunk.paper
         lines.extend(
             [
-                f"## {suggestion.citation}",
-                f"Support score: {suggestion.source.score:.2f}",
-                f"> Draft: {suggestion.draft_text}",
-                f"> Evidence: {suggestion.evidence}",
+                f"## Suggestion {number}",
                 "",
-                f"Rationale: {suggestion.rationale}",
+                f"**Citation:** {suggestion.citation}",
+                f"**Support score:** `{suggestion.source.score:.2f}`",
+                "",
+                "### Draft claim",
+                *_blockquote(suggestion.draft_text),
+                "",
+                "### Evidence",
+                *_blockquote(suggestion.evidence),
+                "",
+                "### Rationale",
+                suggestion.rationale,
+                "",
+                "### Source",
+                f"- **Paper:** {paper.title}",
+                f"- **Authors:** {', '.join(paper.authors) or 'Unknown'}",
+                f"- **Page:** {suggestion.source.chunk.page or 'Unknown'}",
+                f"- **DOI:** {paper.doi or 'Unknown'}",
+                "",
+                "---",
                 "",
             ]
         )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _blockquote(text: str) -> list[str]:
+    return [f"> {line}" for line in text.splitlines()] or ["> "]
 
 
 def sources_to_markdown(matches: Iterable[DraftMatch]) -> str:

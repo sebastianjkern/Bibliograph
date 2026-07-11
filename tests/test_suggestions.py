@@ -20,3 +20,16 @@ def test_markdown_export_contains_evidence():
     markdown = to_markdown([suggestion])
     assert "Evidence from page three" in markdown
     assert "The draft claim." in markdown
+
+
+def test_markdown_export_groups_suggestion_details():
+    suggestion = suggest_citations([_match()])[0]
+
+    markdown = to_markdown([suggestion])
+
+    assert "## Suggestion 1" in markdown
+    assert "### Draft claim" in markdown
+    assert "### Evidence" in markdown
+    assert "### Rationale" in markdown
+    assert "### Source" in markdown
+    assert "**Support score:** `0.90`" in markdown
