@@ -94,6 +94,8 @@ uv run bibliograph check example.tex "My Collection"
 
 This uses the cached SentenceTransformer embedding model, the `pdfs` directory, the persistent `bibliograph.db` index, remote PDF downloads for missing DOI papers, LLM reranking with `qwen/qwen3-1.7b` when available, and prints the report to the console. Add `--output citation-check.md` when you want to save the report.
 
+The index records the selected embedding backend and model. If you change models later, Bibliograph clears the incompatible vectors and reindexes the available PDFs automatically.
+
 To index a PDF that is already on disk and then search a draft:
 
 ```bash
@@ -302,7 +304,7 @@ def main() -> None:
     # Uses EMBEDDING_MODEL, SENTENCE_TRANSFORMERS_CACHE, and
     # SENTENCE_TRANSFORMERS_OFFLINE from the environment when configured.
     embedder = SentenceTransformerEmbedder.from_environment()
-    index = SQLiteIndex(args.db, dimension=embedder.dimension)
+    index = SQLiteIndex(args.db, dimension=embedder.dimension, embedding_id=embedder.identity)
     zotero = load_zotero_client()
     collection_key = find_collection_key(zotero, args.collection)
 

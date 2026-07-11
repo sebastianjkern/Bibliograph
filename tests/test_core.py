@@ -74,6 +74,26 @@ def test_sqlite_vec_index_persists_across_reopen():
     assert result[0].chunk.paper.zotero_key == "PERSIST"
 
 
+def test_changing_embedding_identity_clears_persistent_index_for_reindexing():
+    paper = Paper("MODEL", "Model-specific Paper")
+    chunk = chunk_pages(paper, [(1, "model-specific evidence")], max_words=20, overlap_words=2)
+    with TemporaryDirectory(dir=".") as directory:
+        path = Path(directory) / "index.db"
+        first = SQLiteIndex(path, embedding_id="model-a")
+        first.upsert(chunk, [[1.0, 0.0]])
+        first.mark_file_indexed("MODEL", 1, __file__)
+        first.close()
+
+        changed = SQLiteIndex(path, embedding_id="model-b")
+
+        assert changed.reindexed is True
+        assert changed.search([1.0, 0.0]) == []
+        assert changed.needs_file_index("MODEL", 1, __file__) is True
+        changed.upsert(chunk, [[1.0, 0.0, 0.0]])
+        assert changed.search([1.0, 0.0, 0.0])[0].chunk.paper.zotero_key == "MODEL"
+        changed.close()
+
+
 def test_sentence_transformer_uses_persistent_cache_and_offline_mode(monkeypatch):
     calls = []
 

@@ -180,8 +180,10 @@ def main(argv: list[str] | None = None) -> int:
         args.embedding_cache_dir,
         args.embedding_offline,
     )
-    index = SQLiteIndex(args.db)
+    index = SQLiteIndex(args.db, embedding_id=getattr(embedder, "identity", None))
     logger.info("Using persistent vector index: %s", args.db)
+    if index.reindexed:
+        logger.info("Index cleared; local PDFs will be reindexed with the selected model")
     try:
         if args.command == "index-pdf":
             paper = Paper(args.key, args.title, tuple(args.author), args.year, args.doi)

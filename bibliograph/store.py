@@ -8,14 +8,24 @@ from pathlib import Path
 
 import sqlite_vec
 
+from .logging_utils import get_logger
 from .models import CitationSource, Paper, TextChunk
+
+logger = get_logger("store")
 
 
 class SQLiteIndex:
     """Persistent metadata store backed by sqlite-vec nearest-neighbor search."""
 
-    def __init__(self, path: str | Path = "bibliograph.db", dimension: int | None = None):
+    def __init__(
+        self,
+        path: str | Path = "bibliograph.db",
+        dimension: int | None = None,
+        embedding_id: str | None = None,
+    ):
         self.path = str(path)
+        self.embedding_id = embedding_id
+        self.reindexed = False
         self.connection = sqlite3.connect(self.path)
         self.connection.enable_load_extension(True)
         sqlite_vec.load(self.connection)
@@ -36,10 +46,29 @@ class SQLiteIndex:
         self.connection.execute(
             "CREATE TABLE IF NOT EXISTS vector_meta (dimension INTEGER NOT NULL)"
         )
+        columns = {
+            row[1] for row in self.connection.execute("PRAGMA table_info(vector_meta)")
+        }
+        if "embedding_id" not in columns:
+            self.connection.execute("ALTER TABLE vector_meta ADD COLUMN embedding_id TEXT")
         self.connection.commit()
         self._vector_dimension = self._stored_dimension()
+        stored_embedding_id = self._stored_embedding_id()
+        if embedding_id is not None and stored_embedding_id != embedding_id:
+            if self._has_index_data():
+                logger.info(
+                    "Embedding model changed from %s to %s; clearing index for reindexing",
+                    stored_embedding_id or "unknown",
+                    embedding_id,
+                )
+                self._reset()
+            else:
+                self._set_embedding_id(embedding_id)
         if dimension is not None:
-            self._ensure_vector_table(dimension)
+            if dimension > 0:
+                if self._vector_dimension not in (None, dimension) and embedding_id is not None:
+                    self._reset()
+                self._ensure_vector_table(dimension)
 
     def upsert(self, chunks: Iterable[TextChunk], embeddings: Iterable[list[float]]) -> int:
         rows = []
@@ -61,6 +90,8 @@ class SQLiteIndex:
                     json.dumps(normalized),
                 )
             )
+        if rows:
+            self._ensure_vector_table(len(json.loads(rows[0][-1])))
         self.connection.executemany(
             """INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chunk_id) DO UPDATE SET
@@ -72,7 +103,6 @@ class SQLiteIndex:
         )
         self.connection.commit()
         if rows:
-            self._ensure_vector_table(len(json.loads(rows[0][-1])))
             for row in rows:
                 self.connection.execute("DELETE FROM vec_chunks WHERE chunk_id = ?", (row[0],))
                 self.connection.execute(
@@ -154,6 +184,28 @@ class SQLiteIndex:
         row = self.connection.execute("SELECT dimension FROM vector_meta LIMIT 1").fetchone()
         return row[0] if row else None
 
+    def _stored_embedding_id(self) -> str | None:
+        row = self.connection.execute("SELECT embedding_id FROM vector_meta LIMIT 1").fetchone()
+        return row[0] if row else None
+
+    def _has_index_data(self) -> bool:
+        return self.connection.execute("SELECT 1 FROM chunks LIMIT 1").fetchone() is not None
+
+    def _set_embedding_id(self, embedding_id: str) -> None:
+        row = self.connection.execute("SELECT 1 FROM vector_meta LIMIT 1").fetchone()
+        if row:
+            self.connection.execute("UPDATE vector_meta SET embedding_id = ?", (embedding_id,))
+        self.connection.commit()
+
+    def _reset(self) -> None:
+        self.connection.execute("DROP TABLE IF EXISTS vec_chunks")
+        self.connection.execute("DELETE FROM chunks")
+        self.connection.execute("DELETE FROM indexed_files")
+        self.connection.execute("DELETE FROM vector_meta")
+        self.connection.commit()
+        self._vector_dimension = None
+        self.reindexed = True
+
     def _ensure_vector_table(self, dimension: int) -> None:
         if dimension <= 0:
             raise ValueError("Embedding dimension must be positive")
@@ -167,7 +219,10 @@ class SQLiteIndex:
                 "CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks "
                 f"USING vec0(embedding float[{dimension}], +chunk_id text)"
             )
-            self.connection.execute("INSERT INTO vector_meta(dimension) VALUES (?)", (dimension,))
+            self.connection.execute(
+                "INSERT INTO vector_meta(dimension, embedding_id) VALUES (?, ?)",
+                (dimension, self.embedding_id),
+            )
             self.connection.commit()
             self._vector_dimension = dimension
 

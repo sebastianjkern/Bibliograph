@@ -24,6 +24,7 @@ class HashEmbedder:
 
     def __init__(self, dimension: int = 256):
         self.dimension = dimension
+        self.identity = f"hash:{dimension}"
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
@@ -49,6 +50,8 @@ class SentenceTransformerEmbedder:
 
         self.cache_dir = cache_dir or _sentence_transformer_cache_dir()
         self.local_files_only = local_files_only
+        self.model_name = model_name
+        self.identity = f"sentence-transformers:{model_name}"
         self.model = SentenceTransformer(
             model_name,
             cache_folder=self.cache_dir,
@@ -118,6 +121,8 @@ class OpenAICompatibleEmbedder:
             )
         self.client = client
         self.model = model
+        self.base_url = base_url or DEFAULT_OPENAI_BASE_URL
+        self.identity = f"openai-compatible:{self.base_url}:{model}"
         self.dimension = 0
 
     @classmethod
