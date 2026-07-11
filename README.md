@@ -7,7 +7,6 @@ Bibliograph is a local citation discovery assistant. It indexes papers from a Zo
 This repository is an early-stage prototype rather than a finished product. It currently provides:
 
 * `bibliograph/` — the reusable ingestion, chunking, embedding, retrieval, suggestion, export, and CLI modules.
-* `app.py` — the original single-PDF proof-of-concept, retained for compatibility.
 * `connections/zotero_collections.py` — helper functions for fetching Zotero collection metadata.
 * `connections/zotero_items.py` — helper functions for fetching Zotero items and exporting them to CSV.
 * `connections/zotero_pdfs.py` — helper functions for downloading PDF attachments from Zotero item metadata.
@@ -345,14 +344,6 @@ Remove `--download-missing` to report missing papers without downloading them. S
 * **Authentication errors:** verify the Zotero library ID, library type, and API key permissions.
 * **Scanned PDFs:** PDFs must contain extractable text; OCR is not currently included.
 * **Start over:** use a new database with `--db fresh-index.db` rather than deleting an existing index.
-
-### Original prototype
-
-```bash
-uv run python app.py
-```
-
-The script currently opens `test.pdf`, extracts sentences, stores them in a local Chroma collection, and lets you query them interactively.
 
 ## Current limitations
 
