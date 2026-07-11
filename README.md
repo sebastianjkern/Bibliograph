@@ -230,6 +230,114 @@ For plain text drafts, the simpler `suggest` command is also available:
 uv run bibliograph suggest draft.txt --output suggestions.md
 ```
 
+### Full Python example
+
+The following example calls the library directly instead of using the CLI. It synchronizes one Zotero collection, optionally downloads missing PDFs from the legal remote resolver chain, indexes them with sqlite-vec, checks a Typst or LaTeX draft, optionally reranks results with an LLM, and writes a Markdown report.
+
+Save it as `check_draft.py` in the repository root:
+
+```python
+import argparse
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from bibliograph.drafts import parse_draft_file
+from bibliograph.embeddings import SentenceTransformerEmbedder
+from bibliograph.export import to_markdown
+from bibliograph.remote import download_remote_pdf
+from bibliograph.reranker import HeuristicReranker, OpenAIReranker, rerank_matches
+from bibliograph.retrieval import find_claim_citations
+from bibliograph.store import SQLiteIndex
+from bibliograph.suggestions import suggest_citations
+from bibliograph.zotero_sync import sync_collection
+from connections.reload_embeddings import find_collection_key, load_zotero_client
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("draft", type=Path, help="A .tex, .latex, or .typ file")
+    parser.add_argument("collection", help="Zotero collection name or key")
+    parser.add_argument("--pdf-dir", type=Path, default=Path("pdfs"))
+    parser.add_argument("--db", default="bibliograph.db")
+    parser.add_argument("--output", type=Path, default=Path("citation-check.md"))
+    parser.add_argument(
+        "--download-missing",
+        action="store_true",
+        help="Download missing DOI PDFs from legal remote sources",
+    )
+    args = parser.parse_args()
+
+    load_dotenv()
+
+    # Uses EMBEDDING_MODEL, SENTENCE_TRANSFORMERS_CACHE, and
+    # SENTENCE_TRANSFORMERS_OFFLINE from the environment when configured.
+    embedder = SentenceTransformerEmbedder.from_environment()
+    index = SQLiteIndex(args.db, dimension=embedder.dimension)
+    zotero = load_zotero_client()
+    collection_key = find_collection_key(zotero, args.collection)
+
+    try:
+        report = sync_collection(zotero, collection_key, args.pdf_dir, index, embedder)
+
+        if args.download_missing:
+            for paper in report.missing_papers:
+                if not paper.doi:
+                    print(f"No DOI available for: {paper.title}")
+                    continue
+                try:
+                    result = download_remote_pdf(
+                        paper.doi,
+                        args.pdf_dir,
+                        title=paper.title,
+                        item_key=paper.item_key,
+                    )
+                    print(f"{result.resolver}: {result.path}")
+                except (FileNotFoundError, ValueError) as error:
+                    print(f"Could not download {paper.title}: {error}")
+
+            # Index PDFs downloaded during this run.
+            report = sync_collection(zotero, collection_key, args.pdf_dir, index, embedder)
+
+        claims = parse_draft_file(args.draft)
+        matches = find_claim_citations(claims, index, embedder, limit=5)
+
+        reranker_model = os.getenv("RERANKER_MODEL")
+        if reranker_model and os.getenv("OPENAI_API_KEY"):
+            reranker = OpenAIReranker(
+                reranker_model,
+                os.environ["OPENAI_API_KEY"],
+                os.getenv("OPENAI_BASE_URL"),
+            )
+        else:
+            reranker = HeuristicReranker()
+        matches = rerank_matches(matches, reranker)
+
+        report_text = (
+            f"Indexed: {len(report.indexed)} | "
+            f"Unchanged: {len(report.unchanged)} | "
+            f"Missing papers: {len(report.missing_papers)}\n\n"
+            + to_markdown(suggest_citations(matches))
+        )
+        args.output.write_text(report_text, encoding="utf-8")
+        print(f"Wrote {args.output}")
+    finally:
+        index.close()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Run it with:
+
+```bash
+uv run python check_draft.py example.tex "My Collection" --download-missing
+```
+
+Remove `--download-missing` to report missing papers without downloading them. Set `RERANKER_MODEL` and `OPENAI_API_KEY` to enable LLM reranking; otherwise the example uses the deterministic retrieval order.
+
 ### Troubleshooting
 
 * **Collection not found:** the collection name must match exactly; use its Zotero collection key if necessary.
