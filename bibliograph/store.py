@@ -163,6 +163,19 @@ class SQLiteIndex:
     def close(self) -> None:
         self.connection.close()
 
+    def context_for(self, chunk: TextChunk, window: int = 1, max_words: int = 600) -> str:
+        """Return nearby indexed chunks from the same paper for grounded quote selection."""
+        if window < 0 or max_words <= 0:
+            raise ValueError("window must be non-negative and max_words must be positive")
+        rows = self.connection.execute(
+            """SELECT text FROM chunks
+            WHERE zotero_key = ? AND chunk_index BETWEEN ? AND ?
+            ORDER BY chunk_index""",
+            (chunk.paper.zotero_key, chunk.chunk_index - window, chunk.chunk_index + window),
+        ).fetchall()
+        words = " ".join(row[0] for row in rows).split()
+        return " ".join(words[:max_words])
+
     def needs_file_index(self, attachment_key: str, source_version: int | None, path: str) -> bool:
         file_hash = _file_hash(path)
         row = self.connection.execute(

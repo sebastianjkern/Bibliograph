@@ -7,7 +7,7 @@ from bibliograph.embeddings import (
     OpenAICompatibleEmbedder,
     SentenceTransformerEmbedder,
 )
-from bibliograph.models import Paper
+from bibliograph.models import Paper, TextChunk
 from bibliograph.store import SQLiteIndex
 
 
@@ -106,6 +106,22 @@ def test_changing_embedding_identity_clears_persistent_index_for_reindexing():
         changed.upsert(chunk, [[1.0, 0.0, 0.0]])
         assert changed.search([1.0, 0.0, 0.0])[0].chunk.paper.zotero_key == "MODEL"
         changed.close()
+
+
+def test_index_returns_neighboring_context_for_grounded_quote_selection():
+    paper = Paper("CONTEXT", "Context Paper")
+    chunks = [
+        TextChunk("CONTEXT:1:0", paper, "Before context", chunk_index=0),
+        TextChunk("CONTEXT:1:1", paper, "Exact supporting sentence", chunk_index=1),
+        TextChunk("CONTEXT:1:2", paper, "After context", chunk_index=2),
+    ]
+    embedder = HashEmbedder()
+    index = SQLiteIndex(":memory:")
+    index.upsert(chunks, embedder.embed([chunk.text for chunk in chunks]))
+
+    context = index.context_for(chunks[1], window=1)
+
+    assert context == "Before context Exact supporting sentence After context"
 
 
 def test_sentence_transformer_uses_persistent_cache_and_offline_mode(monkeypatch):

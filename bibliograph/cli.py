@@ -16,7 +16,11 @@ from .models import Paper
 from .reranker import HeuristicReranker, OpenAIReranker, rerank_matches
 from .retrieval import find_citations, find_claim_citations, find_claim_sources
 from .store import SQLiteIndex
-from .suggestions import OpenAISuggestionGenerator, suggest_citations
+from .suggestions import (
+    OpenAIEvidenceExtractor,
+    OpenAISuggestionGenerator,
+    suggest_citations,
+)
 from .zotero_sync import MissingPaper, is_remote_downloadable_item, sync_collection
 
 
@@ -91,6 +95,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use deterministic rationales instead of the local LLM",
     )
+    suggest.add_argument(
+        "--no-evidence-extraction",
+        action="store_true",
+        help="Keep retrieved chunks instead of selecting exact evidence with the LLM",
+    )
 
     find_sources = subparsers.add_parser(
         "find-sources",
@@ -115,6 +124,11 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--output", type=Path)
     check.add_argument("--llm-model", default=DEFAULT_LLM_MODEL)
     check.add_argument("--no-rerank", action="store_true", help="Skip LLM reranking")
+    check.add_argument(
+        "--no-evidence-extraction",
+        action="store_true",
+        help="Keep retrieved chunks instead of selecting exact evidence with the LLM",
+    )
     download_group = check.add_mutually_exclusive_group()
     download_group.add_argument(
         "--download-missing",
@@ -354,7 +368,27 @@ def main(argv: list[str] | None = None) -> int:
                     matches = rerank_matches(matches, HeuristicReranker())
             else:
                 matches = rerank_matches(matches, HeuristicReranker())
-            output = to_markdown(suggest_citations(matches))
+            evidence_extractor = None
+            if not args.no_evidence_extraction:
+                logger.info("Selecting exact supporting passages with the LLM")
+                try:
+                    api_key, base_url = openai_settings()
+                    evidence_extractor = OpenAIEvidenceExtractor(
+                        args.llm_model,
+                        api_key,
+                        base_url,
+                    )
+                except Exception as error:
+                    logger.warning(
+                        "Evidence extraction unavailable; using retrieved chunks: %s", error
+                    )
+            output = to_markdown(
+                suggest_citations(
+                    matches,
+                    evidence_extractor=evidence_extractor,
+                    context_provider=index.context_for,
+                )
+            )
             summary = (
                 f"Indexed: {len(report.indexed)} | Unchanged: {len(report.unchanged)} | "
                 f"Imported: {len(report.imported)} | "
@@ -395,7 +429,26 @@ def main(argv: list[str] | None = None) -> int:
                 logger.warning(
                     "LLM suggestions unavailable; using deterministic rationales: %s", error
                 )
-        output = to_markdown(suggest_citations(matches, generator, args.min_score))
+        evidence_extractor = None
+        if not args.no_llm and not args.no_evidence_extraction:
+            try:
+                api_key, base_url = openai_settings()
+                evidence_extractor = OpenAIEvidenceExtractor(
+                    args.llm_model,
+                    api_key,
+                    base_url,
+                )
+            except Exception as error:
+                logger.warning("Evidence extraction unavailable; using retrieved chunks: %s", error)
+        output = to_markdown(
+            suggest_citations(
+                matches,
+                generator,
+                args.min_score,
+                evidence_extractor=evidence_extractor,
+                context_provider=index.context_for,
+            )
+        )
         if args.output:
             args.output.write_text(output, encoding="utf-8")
             logger.info("Wrote report: %s", args.output)

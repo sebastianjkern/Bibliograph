@@ -96,6 +96,8 @@ Reports are printed to the console by default. Save one with:
 uv run bibliograph check example.tex "My Collection" --output citation-check.md
 ```
 
+Evidence extraction is enabled by default for citation suggestions. Use `--no-evidence-extraction` to keep the retrieved chunks unchanged.
+
 ### Search one claim without updating the index
 
 ```bash
@@ -173,6 +175,7 @@ Changing the embedding model or structured PDF-processing version automatically 
 - SentenceTransformer, deterministic hash, and OpenAI-compatible embeddings.
 - Persistent SQLite/sqlite-vec vector search.
 - LLM-assisted reranking with a deterministic fallback.
+- Grounded evidence extraction from nearby indexed context with exact-quote validation.
 - Rich-colored progress logs and formatted console reports.
 - LaTeX, Typst, and plain-text draft search.
 

@@ -1,8 +1,24 @@
+import json
+import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
 from .config import DEFAULT_OPENAI_API_KEY, DEFAULT_OPENAI_BASE_URL
-from .models import CitationSource, DraftMatch
+from .models import CitationSource, DraftMatch, TextChunk
+
+
+@dataclass(frozen=True)
+class EvidenceSelection:
+    supports_claim: bool
+    quote: str
+    rationale: str
+
+
+class EvidenceExtractor(Protocol):
+    def extract(
+        self, draft_text: str, source: CitationSource, context: str
+    ) -> EvidenceSelection: ...
 
 
 @dataclass(frozen=True)
@@ -62,6 +78,61 @@ class OpenAISuggestionGenerator:
         return response.choices[0].message.content or ""
 
 
+class OpenAIEvidenceExtractor:
+    """Select an exact, source-grounded quote from retrieved context."""
+
+    def __init__(
+        self,
+        model: str,
+        api_key: str = DEFAULT_OPENAI_API_KEY,
+        base_url: str | None = None,
+        client=None,
+    ):
+        if client is None:
+            from openai import OpenAI
+
+            client = OpenAI(
+                api_key=api_key or DEFAULT_OPENAI_API_KEY,
+                base_url=base_url or DEFAULT_OPENAI_BASE_URL,
+            )
+        self.client = client
+        self.model = model
+
+    def extract(
+        self, draft_text: str, source: CitationSource, context: str
+    ) -> EvidenceSelection:
+        response = self.client.chat.completions.create(
+            model=self.model,
+            temperature=0,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Select exact evidence for a draft claim. Return JSON only with "
+                        "supports_claim (boolean), quote (exact text copied from CONTEXT), "
+                        "and rationale (short explanation). Never invent or paraphrase a quote."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"CLAIM:\n{draft_text}\n\nSOURCE:\n"
+                        f"{source.chunk.paper.citation_label}, "
+                        f"page {source.chunk.page or 'unknown'}\n\n"
+                        f"CONTEXT:\n{context}"
+                    ),
+                },
+            ],
+        )
+        content = response.choices[0].message.content or "{}"
+        payload = _parse_evidence_payload(content)
+        return EvidenceSelection(
+            bool(payload.get("supports_claim", False)),
+            str(payload.get("quote", "")).strip(),
+            str(payload.get("rationale", "")).strip(),
+        )
+
+
 def format_citation(source: CitationSource) -> str:
     paper = source.chunk.paper
     authors = ", ".join(paper.authors) if paper.authors else paper.title
@@ -75,6 +146,8 @@ def suggest_citations(
     matches: list[DraftMatch],
     generator: SuggestionGenerator | None = None,
     min_score: float = 0.0,
+    evidence_extractor: EvidenceExtractor | None = None,
+    context_provider: Callable[[TextChunk], str] | None = None,
 ) -> list[CitationSuggestion]:
     generator = generator or GroundedTemplateGenerator()
     suggestions: list[CitationSuggestion] = []
@@ -83,13 +156,45 @@ def suggest_citations(
         if not eligible:
             continue
         source = eligible[0]
+        evidence = source.chunk.text
+        rationale = generator.explain(match.draft_text, evidence)
+        if evidence_extractor is not None and context_provider is not None:
+            try:
+                context = context_provider(source.chunk)
+                selection = evidence_extractor.extract(match.draft_text, source, context)
+                if selection.supports_claim and selection.quote and selection.quote in context:
+                    evidence = selection.quote
+                    rationale = selection.rationale or rationale
+            except Exception:
+                pass
         suggestions.append(
             CitationSuggestion(
                 draft_text=match.draft_text,
                 citation=format_citation(source),
-                evidence=source.chunk.text,
+                evidence=evidence,
                 source=source,
-                rationale=generator.explain(match.draft_text, source.chunk.text),
+                rationale=rationale,
             )
         )
     return suggestions
+
+
+def _parse_evidence_payload(content: str | list[dict]) -> dict:
+    if isinstance(content, list):
+        content = "".join(
+            part.get("text", "") for part in content if isinstance(part, dict)
+        )
+    if not isinstance(content, str):
+        raise ValueError("LLM evidence response content is not text")
+    cleaned = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned.strip(), flags=re.IGNORECASE)
+    try:
+        payload = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        payload = json.loads(cleaned[start : end + 1])
+    if not isinstance(payload, dict):
+        raise ValueError("LLM evidence response must be a JSON object")
+    return payload

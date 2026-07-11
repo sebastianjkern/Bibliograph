@@ -1,6 +1,6 @@
 from bibliograph.export import to_markdown
 from bibliograph.models import CitationSource, DraftMatch, Paper, TextChunk
-from bibliograph.suggestions import GroundedTemplateGenerator, suggest_citations
+from bibliograph.suggestions import EvidenceSelection, GroundedTemplateGenerator, suggest_citations
 
 
 def _match() -> DraftMatch:
@@ -33,3 +33,26 @@ def test_markdown_export_groups_suggestion_details():
     assert "### Rationale" in markdown
     assert "### Source" in markdown
     assert "**Support score:** `0.90`" in markdown
+
+
+def test_suggestion_uses_only_verbatim_selected_evidence():
+    class Extractor:
+        def __init__(self, quote):
+            self.quote = quote
+
+        def extract(self, draft_text, source, context):
+            return EvidenceSelection(True, self.quote, "The exact sentence supports the claim.")
+
+    selected = suggest_citations(
+        [_match()],
+        evidence_extractor=Extractor("Exact supporting sentence."),
+        context_provider=lambda chunk: "Before. Exact supporting sentence. After.",
+    )[0]
+    rejected = suggest_citations(
+        [_match()],
+        evidence_extractor=Extractor("Invented sentence."),
+        context_provider=lambda chunk: "Before. Exact supporting sentence. After.",
+    )[0]
+
+    assert selected.evidence == "Exact supporting sentence."
+    assert rejected.evidence == "Evidence from page three"
