@@ -31,6 +31,8 @@ def test_sync_reports_missing_pdf_without_downloading():
     with TemporaryDirectory(dir=".") as directory:
         report = sync_collection(_Zotero(), "COL1", directory, index, HashEmbedder())
     assert report.missing_local_pdf == ["A1"]
+    assert report.missing_papers[0].title == "Study"
+    assert report.missing_papers[0].attachment_keys == ("A1",)
     assert report.indexed == []
 
 

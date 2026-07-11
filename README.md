@@ -158,6 +158,14 @@ The command:
 
 It does not download PDFs. Use the single-item command above for each missing paper, then rerun `check`.
 
+To let `check` download missing attachments through the same single-item Zotero backend, opt in explicitly:
+
+```bash
+uv run bibliograph check example.tex "My Collection" --pdf-dir pdfs --download-missing
+```
+
+Missing-paper names, DOIs, and available attachment keys are printed in the report. Papers without an available attachment key are still listed by title and DOI; the backend resolves them through the parent Zotero item when possible.
+
 ### Enable LLM reranking
 
 Set `OPENAI_API_KEY` and, if needed, `OPENAI_BASE_URL` in `.env`, then provide a chat model:

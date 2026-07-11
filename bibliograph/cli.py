@@ -11,7 +11,7 @@ from .reranker import HeuristicReranker, OpenAIReranker, rerank_matches
 from .retrieval import find_citations, find_claim_citations
 from .store import SQLiteIndex
 from .suggestions import OpenAISuggestionGenerator, suggest_citations
-from .zotero_sync import sync_collection
+from .zotero_sync import MissingPaper, sync_collection
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -75,6 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--min-score", type=float, default=0.0)
     check.add_argument("--output", type=Path)
     check.add_argument("--llm-model", help="Optional chat model for evidence reranking")
+    check.add_argument(
+        "--download-missing",
+        action="store_true",
+        help="Download missing PDFs through the single-item Zotero backend",
+    )
     return parser
 
 
@@ -131,6 +136,24 @@ def main(argv: list[str] | None = None) -> int:
             report = sync_collection(
                 zotero, collection_key, args.pdf_dir, index, embedder
             )
+            downloaded: list[str] = []
+            if args.download_missing:
+                from connections.reload_embeddings import download_pdf_for_item
+
+                for missing in report.missing_papers:
+                    try:
+                        result = download_pdf_for_item(
+                            missing.item_key,
+                            str(args.pdf_dir),
+                            missing.attachment_keys[0] if missing.attachment_keys else None,
+                        )
+                    except ValueError:
+                        continue
+                    downloaded.append(result.path)
+                if downloaded:
+                    report = sync_collection(
+                        zotero, collection_key, args.pdf_dir, index, embedder
+                    )
             matches = find_claim_citations(
                 parse_draft_file(args.draft),
                 index,
@@ -151,10 +174,12 @@ def main(argv: list[str] | None = None) -> int:
             output = to_markdown(suggest_citations(matches))
             summary = (
                 f"Indexed: {len(report.indexed)} | Unchanged: {len(report.unchanged)} | "
-                f"Missing local PDFs: {len(report.missing_local_pdf)}\n"
+                f"Missing papers: {len(report.missing_papers)} | Downloaded: {len(downloaded)}\n"
             )
-            if report.missing_local_pdf:
-                summary += "Missing attachment keys: " + ", ".join(report.missing_local_pdf) + "\n"
+            if report.missing_papers:
+                summary += "Missing papers:\n" + "\n".join(
+                    _format_missing_paper(paper) for paper in report.missing_papers
+                ) + "\n"
             output = summary + "\n" + output
             if args.output:
                 args.output.write_text(output, encoding="utf-8")
@@ -187,3 +212,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     finally:
         index.close()
+
+
+def _format_missing_paper(paper: MissingPaper) -> str:
+    doi = f" — DOI: {paper.doi}" if paper.doi else ""
+    keys = f" — attachments: {', '.join(paper.attachment_keys)}" if paper.attachment_keys else ""
+    return f"- {paper.title}{doi}{keys}"
