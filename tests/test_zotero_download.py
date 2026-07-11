@@ -81,6 +81,24 @@ def test_download_pdf_for_item_downloads_one_missing_attachment(monkeypatch):
         assert zotero.downloads == 1
 
 
+def test_download_pdf_for_item_imports_from_local_zotero_storage(monkeypatch):
+    zotero = _Zotero()
+    monkeypatch.setattr("connections.reload_embeddings.load_zotero_client", lambda: zotero)
+    with TemporaryDirectory(dir=".") as directory:
+        storage = Path(directory) / "storage"
+        (storage / "ATTACH").mkdir(parents=True)
+        (storage / "ATTACH" / "paper.pdf").write_bytes(b"%PDF-local")
+        output = Path(directory) / "pdfs"
+
+        result = download_pdf_for_item(
+            "PARENT", output, zotero_storage_dir=str(storage)
+        )
+
+        assert result.downloaded is True
+        assert Path(result.path).read_bytes() == b"%PDF-local"
+        assert zotero.downloads == 0
+
+
 def test_resolve_item_key_by_doi_or_title():
     zotero = _Zotero()
     assert resolve_item_key(zotero, doi="https://doi.org/10/example") == "PARENT"

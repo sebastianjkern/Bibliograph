@@ -96,3 +96,34 @@ def test_sync_skips_unsupported_zotero_items_before_pdf_lookup():
 
     assert report.missing_papers == []
     assert report.missing_local_pdf == []
+
+
+def test_sync_imports_pdf_from_local_zotero_storage_before_reporting_missing():
+    index = SQLiteIndex(":memory:")
+    calls = []
+
+    def fake_indexer(index, embedder, paper, path):
+        calls.append(Path(path).name)
+        return 1
+
+    with TemporaryDirectory(dir=".") as directory:
+        storage = Path(directory) / "storage"
+        (storage / "A1").mkdir(parents=True)
+        (storage / "A1" / "paper.pdf").write_bytes(b"%PDF-from-zotero")
+        cache = Path(directory) / "pdfs"
+
+        report = sync_collection(
+            _Zotero(),
+            "COL1",
+            cache,
+            index,
+            HashEmbedder(),
+            fake_indexer,
+            zotero_storage_dir=storage,
+        )
+
+        assert report.imported == ["A1"]
+        assert report.indexed == ["A1"]
+        assert report.missing_papers == []
+        assert (cache / "A1.pdf").read_bytes() == b"%PDF-from-zotero"
+        assert calls == ["A1.pdf"]

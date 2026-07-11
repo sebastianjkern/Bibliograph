@@ -27,6 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quiet", action="store_true", help="Disable console progress logging")
     parser.add_argument("--db", default="bibliograph.db", help="SQLite index path")
     parser.add_argument(
+        "--zotero-storage-dir",
+        default=os.getenv("ZOTERO_STORAGE_DIR"),
+        help="Local Zotero storage directory (usually .../storage)",
+    )
+    parser.add_argument(
         "--embedding-provider",
         choices=("hash", "sentence-transformers", "openai"),
         default="sentence-transformers",
@@ -166,6 +171,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.attachment_key,
                 args.doi,
                 args.title,
+                args.zotero_storage_dir,
             )
         status = "Downloaded" if result.downloaded else "Already present"
         logger.info("%s PDF: %s", status, result.path)
@@ -201,7 +207,12 @@ def main(argv: list[str] | None = None) -> int:
             collection_key = find_collection_key(zotero, args.collection)
             logger.info("Synchronizing collection %s", collection_key)
             report = sync_collection(
-                zotero, collection_key, args.pdf_dir, index, embedder
+                zotero,
+                collection_key,
+                args.pdf_dir,
+                index,
+                embedder,
+                zotero_storage_dir=args.zotero_storage_dir,
             )
             logger.info(
                 "Sync complete: %d indexed, %d unchanged, %d missing",
@@ -209,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
                 len(report.unchanged),
                 len(report.missing_papers),
             )
+            if report.imported:
+                logger.info("Imported %d PDFs from local Zotero storage", len(report.imported))
             downloaded: list[str] = []
             if args.download_missing:
                 logger.info(
@@ -248,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
                                 missing.attachment_keys[0]
                                 if missing.attachment_keys
                                 else None,
+                                zotero_storage_dir=args.zotero_storage_dir,
                             )
                     except (FileNotFoundError, ValueError) as error:
                         logger.warning("Could not download missing paper: %s", missing.title)
@@ -259,7 +273,12 @@ def main(argv: list[str] | None = None) -> int:
                 if downloaded:
                     logger.info("Re-synchronizing downloaded PDFs")
                     report = sync_collection(
-                        zotero, collection_key, args.pdf_dir, index, embedder
+                        zotero,
+                        collection_key,
+                        args.pdf_dir,
+                        index,
+                        embedder,
+                        zotero_storage_dir=args.zotero_storage_dir,
                     )
             logger.info("Parsing draft and retrieving claim evidence: %s", args.draft)
             matches = find_claim_citations(
@@ -288,7 +307,9 @@ def main(argv: list[str] | None = None) -> int:
             output = to_markdown(suggest_citations(matches))
             summary = (
                 f"Indexed: {len(report.indexed)} | Unchanged: {len(report.unchanged)} | "
-                f"Missing papers: {len(report.missing_papers)} | Downloaded: {len(downloaded)}\n"
+                f"Imported: {len(report.imported)} | "
+                f"Missing papers: {len(report.missing_papers)} | "
+                f"Downloaded: {len(downloaded)}\n"
             )
             if report.missing_papers:
                 summary += "Missing papers:\n" + "\n".join(

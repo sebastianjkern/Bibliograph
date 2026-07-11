@@ -58,9 +58,12 @@ Edit `.env`:
 ZOTERO_LIBRARY_ID=your_library_id
 ZOTERO_LIBRARY_TYPE=user
 ZOTERO_API_KEY=your_api_key
+ZOTERO_STORAGE_DIR=path/to/zotero/storage
 ```
 
 Use `ZOTERO_LIBRARY_TYPE=group` for a group library. The API key must have read access to the library.
+
+`ZOTERO_STORAGE_DIR` should point to Zotero's local `storage` directory. When set, Bibliograph imports valid PDFs from `storage/<attachment-key>/` into `pdfs` before trying any API or remote download. On Windows this is commonly under `%APPDATA%\Zotero\Zotero\Profiles\<profile>\storage`; on Linux, under `~/.zotero/zotero/<profile>/storage`.
 
 ### Create a draft
 
@@ -92,7 +95,7 @@ After configuring Zotero and creating `example.tex`, run the complete workflow w
 uv run bibliograph check example.tex "My Collection"
 ```
 
-This uses the cached SentenceTransformer embedding model, the `pdfs` directory, the persistent `bibliograph.db` index, remote PDF downloads for missing DOI papers, LLM reranking with `qwen/qwen3-1.7b` when available, and prints the report to the console. Add `--output citation-check.md` when you want to save the report.
+This uses the cached SentenceTransformer embedding model, the `pdfs` directory, the persistent `bibliograph.db` index, local Zotero PDFs before remote downloads for missing DOI papers, LLM reranking with `qwen/qwen3-1.7b` when available, and prints the report to the console. Add `--output citation-check.md` when you want to save the report.
 
 The index records the selected embedding backend and model. If you change models later, Bibliograph clears the incompatible vectors and reindexes the available PDFs automatically.
 
@@ -202,6 +205,7 @@ uv run bibliograph check example.tex "My Collection" --pdf-dir pdfs --output cit
 The command:
 
 * checks the selected Zotero collection;
+* imports already-downloaded PDFs from Zotero's local storage when configured;
 * detects new or changed attachments using Zotero versions and local file hashes;
 * indexes only local PDFs that need indexing;
 * reports Zotero PDFs that are not downloaded locally;
@@ -327,7 +331,14 @@ def main() -> None:
     collection_key = find_collection_key(zotero, args.collection)
 
     try:
-        report = sync_collection(zotero, collection_key, args.pdf_dir, index, embedder)
+        report = sync_collection(
+            zotero,
+            collection_key,
+            args.pdf_dir,
+            index,
+            embedder,
+            zotero_storage_dir=os.getenv("ZOTERO_STORAGE_DIR"),
+        )
 
         if args.download_missing:
             for paper in report.missing_papers:
@@ -349,7 +360,14 @@ def main() -> None:
                     print(f"Could not download {paper.title}: {error}")
 
             # Index PDFs downloaded during this run.
-            report = sync_collection(zotero, collection_key, args.pdf_dir, index, embedder)
+            report = sync_collection(
+                zotero,
+                collection_key,
+                args.pdf_dir,
+                index,
+                embedder,
+                zotero_storage_dir=os.getenv("ZOTERO_STORAGE_DIR"),
+            )
 
         claims = parse_draft_file(args.draft)
         matches = find_claim_citations(claims, index, embedder, limit=5)

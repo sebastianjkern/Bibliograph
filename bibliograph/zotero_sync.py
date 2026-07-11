@@ -1,4 +1,5 @@
 import re
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +33,7 @@ PAPER_ITEM_TYPES = frozenset(
 class SyncReport:
     indexed: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
+    imported: list[str] = field(default_factory=list)
     missing_local_pdf: list[str] = field(default_factory=list)
     missing_papers: list["MissingPaper"] = field(default_factory=list)
 
@@ -52,6 +54,7 @@ def sync_collection(
     index: SQLiteIndex,
     embedder: Embedder,
     indexer: Callable[..., int] = index_pdf,
+    zotero_storage_dir: str | Path | None = None,
 ) -> SyncReport:
     """Incrementally index local PDFs belonging to one Zotero collection.
 
@@ -59,6 +62,7 @@ def sync_collection(
     so callers can resolve them even when attachment keys are unavailable.
     """
     report = SyncReport()
+    storage_dir = Path(zotero_storage_dir) if zotero_storage_dir else None
     items = zotero.everything(zotero.collection_items(collection_key))
     logger.info("Found %d Zotero items in collection", len(items))
     for item in items:
@@ -101,6 +105,12 @@ def sync_collection(
                 missing_keys.append("")
                 continue
             local_path = _find_local_pdf(pdf_dir, attachment_key, item_key, item_data.get("DOI"))
+            if local_path is None and storage_dir is not None:
+                zotero_path = find_zotero_local_pdf(storage_dir, attachment_key)
+                if zotero_path is not None:
+                    local_path = import_zotero_pdf(zotero_path, pdf_dir, attachment_key)
+                    report.imported.append(attachment_key)
+                    logger.info("Imported Zotero local PDF: %s", zotero_path)
             if local_path is None:
                 report.missing_local_pdf.append(attachment_key)
                 missing_keys.append(attachment_key)
@@ -146,6 +156,25 @@ def is_pdf_attachment(data: dict[str, Any]) -> bool:
 def is_remote_downloadable_item(item_type: str) -> bool:
     """Return whether a Zotero parent type is suitable for DOI-to-PDF retrieval."""
     return item_type in PAPER_ITEM_TYPES
+
+
+def find_zotero_local_pdf(storage_dir: str | Path, attachment_key: str) -> Path | None:
+    """Find a valid PDF in Zotero's local ``storage/<attachment-key>`` folder."""
+    attachment_dir = Path(storage_dir) / attachment_key
+    if not attachment_dir.is_dir():
+        return None
+    for candidate in sorted(attachment_dir.rglob("*")):
+        if candidate.is_file() and is_pdf_file(candidate):
+            return candidate
+    return None
+
+
+def import_zotero_pdf(source: str | Path, output_dir: str | Path, attachment_key: str) -> Path:
+    """Copy a Zotero-local PDF into Bibliograph's attachment-key cache."""
+    destination = Path(output_dir) / f"{attachment_key}.pdf"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    return destination
 
 
 def _find_local_pdf(

@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Any
 
 from bibliograph.zotero_sync import (
+    find_zotero_local_pdf,
+    import_zotero_pdf,
     is_pdf_attachment,
     is_pdf_file,
     is_remote_downloadable_item,
@@ -167,6 +169,7 @@ def download_pdf_for_item(
     attachment_key: str | None = None,
     doi: str | None = None,
     title: str | None = None,
+    zotero_storage_dir: str | None = None,
 ) -> DownloadResult:
     """Download one PDF attachment for one Zotero item, only if it is not local.
 
@@ -198,6 +201,11 @@ def download_pdf_for_item(
     existing = find_local_pdf(output_dir, selected_key)
     if existing:
         return DownloadResult(str(existing), downloaded=False, attachment_key=selected_key)
+    if zotero_storage_dir:
+        zotero_path = find_zotero_local_pdf(zotero_storage_dir, selected_key)
+        if zotero_path is not None:
+            imported = import_zotero_pdf(zotero_path, output_dir, selected_key)
+            return DownloadResult(str(imported), downloaded=True, attachment_key=selected_key)
     path = download_pdf_attachment(zot, selected_key, output_dir)
     return DownloadResult(path, downloaded=True, attachment_key=selected_key)
 
