@@ -53,3 +53,16 @@ def test_reranker_parses_qwen_reasoning_and_markdown_json():
     )
 
     assert payload == {"items": []}
+
+
+def test_reranker_accepts_top_level_json_array():
+    payload = _parse_json_payload(
+        '\n\n[{"candidate": 0, "support": 1}, {"candidate": 1, "support": 0.5}]'
+    )
+
+    assert payload == {
+        "items": [
+            {"candidate": 0, "support": 1},
+            {"candidate": 1, "support": 0.5},
+        ]
+    }

@@ -104,8 +104,10 @@ def _parse_json_payload(content: str | list[dict]) -> dict:
         if start < 0 or end <= start:
             raise
         payload = json.loads(cleaned[start : end + 1])
+    if isinstance(payload, list):
+        return {"items": payload}
     if not isinstance(payload, dict):
-        raise ValueError("LLM reranker response must be a JSON object")
+        raise ValueError("LLM reranker response must be a JSON object or array")
     return payload
 
 
