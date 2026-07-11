@@ -16,6 +16,16 @@ def test_cli_check_accepts_draft_and_collection():
     assert args.llm_model == "reranker"
 
 
+def test_cli_accepts_direct_local_source_lookup():
+    args = build_parser().parse_args(["find-sources", "causal effects of roads", "--limit", "3"])
+
+    assert args.command == "find-sources"
+    assert args.claim == "causal effects of roads"
+    assert args.limit == 3
+    assert args.llm_model == "qwen/qwen3-1.7b"
+    assert args.no_rerank is False
+
+
 def test_cli_has_local_first_defaults():
     args = build_parser().parse_args(["check", "draft.tex", "Methods"])
     assert args.embedding_provider == "sentence-transformers"

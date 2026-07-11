@@ -106,6 +106,14 @@ uv run bibliograph index-pdf paper.pdf --key PAPER1 --title "Paper title"
 uv run bibliograph suggest example.tex
 ```
 
+To search the local library for one claim without providing a draft or syncing Zotero:
+
+```bash
+uv run bibliograph find-sources "Road infrastructure improves regional market access" --limit 5
+```
+
+The command reranks the retrieved sources with the configured LLM by default. Add `--no-rerank` for deterministic retrieval order, or `--output sources.md` to save the ranked evidence.
+
 For a fully local setup with LM Studio, start its local server, load `qwen/qwen3-1.7b` and `text-embedding-nomic-embed-text-v1.5`, then run:
 
 ```bash

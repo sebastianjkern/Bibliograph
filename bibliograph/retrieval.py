@@ -31,6 +31,26 @@ def find_citations(
     return matches
 
 
+def find_claim_sources(
+    claim: str,
+    index: SQLiteIndex,
+    embedder: Embedder,
+    limit: int = 5,
+    min_score: float = 0.0,
+) -> list[DraftMatch]:
+    """Find evidence for one claim without parsing or synchronizing a draft."""
+    claim = claim.strip()
+    if not claim:
+        raise ValueError("A claim is required")
+    embedding = embedder.embed([claim])[0]
+    sources = tuple(
+        source
+        for source in index.search(embedding, limit, query_text=claim)
+        if source.score >= min_score
+    )
+    return [DraftMatch(claim, sources)]
+
+
 def find_claim_citations(
     claims: Iterable[DraftClaim],
     index: SQLiteIndex,

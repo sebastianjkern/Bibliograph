@@ -7,12 +7,12 @@ from dotenv import load_dotenv
 from .config import DEFAULT_LLM_MODEL, openai_settings
 from .drafts import parse_draft_file
 from .embeddings import HashEmbedder, OpenAICompatibleEmbedder, SentenceTransformerEmbedder
-from .export import to_markdown
+from .export import sources_to_markdown, to_markdown
 from .ingest import index_pdf
 from .logging_utils import configure_logging, get_logger
 from .models import Paper
 from .reranker import HeuristicReranker, OpenAIReranker, rerank_matches
-from .retrieval import find_citations, find_claim_citations
+from .retrieval import find_citations, find_claim_citations, find_claim_sources
 from .store import SQLiteIndex
 from .suggestions import OpenAISuggestionGenerator, suggest_citations
 from .zotero_sync import MissingPaper, is_remote_downloadable_item, sync_collection
@@ -89,6 +89,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use deterministic rationales instead of the local LLM",
     )
+
+    find_sources = subparsers.add_parser(
+        "find-sources",
+        aliases=("find",),
+        help="Find sources for one claim in the local vector index",
+    )
+    find_sources.add_argument("claim", help="Claim or question to search for")
+    find_sources.add_argument("--limit", type=int, default=5)
+    find_sources.add_argument("--min-score", type=float, default=0.0)
+    find_sources.add_argument("--output", type=Path)
+    find_sources.add_argument("--llm-model", default=DEFAULT_LLM_MODEL)
+    find_sources.add_argument("--no-rerank", action="store_true")
 
     check = subparsers.add_parser(
         "check", help="Sync one Zotero collection and check a Typst/LaTeX draft"
@@ -200,6 +212,34 @@ def main(argv: list[str] | None = None) -> int:
             count = index_pdf(index, embedder, paper, args.pdf)
             logger.info("Indexed %d chunks from %s", count, args.pdf)
             print(f"Indexed {count} chunks from {args.pdf}")
+            return 0
+
+        if args.command in {"find-sources", "find"}:
+            logger.info("Searching local sources for claim")
+            matches = find_claim_sources(
+                args.claim,
+                index,
+                embedder,
+                limit=args.limit,
+                min_score=args.min_score,
+            )
+            if not args.no_rerank:
+                logger.info("Reranking local sources with LLM model: %s", args.llm_model)
+                try:
+                    api_key, base_url = openai_settings()
+                    matches = rerank_matches(
+                        matches,
+                        OpenAIReranker(args.llm_model, api_key, base_url),
+                    )
+                except Exception as error:
+                    logger.warning("LLM reranking unavailable; using retrieval order: %s", error)
+                    matches = rerank_matches(matches, HeuristicReranker())
+            output = sources_to_markdown(matches)
+            if args.output:
+                args.output.write_text(output, encoding="utf-8")
+                logger.info("Wrote report: %s", args.output)
+            else:
+                print(output)
             return 0
 
         if args.command == "check":
