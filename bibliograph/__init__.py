@@ -1,5 +1,5 @@
-"""Core library for semantic citation discovery."""
+"""Provider-oriented citation discovery for Zotero-backed paper libraries."""
 
-from .models import CitationSource, DraftMatch, Paper, TextChunk
+from .domain import Chunk, Paper, ScoredChunk
 
-__all__ = ["CitationSource", "DraftMatch", "Paper", "TextChunk"]
+__all__ = ["Chunk", "Paper", "ScoredChunk"]

@@ -1,0 +1,27 @@
+# Non-secret, semi-static configuration. Select with --profile NAME.
+
+[profiles.default]
+db = "bibliograph.db"
+pdf_dir = "pdfs"
+collection = "My Collection"
+
+[profiles.default.embedding]
+provider = "ollama"
+model = "nomic-embed-text"
+base_url = "http://localhost:11434"
+batch_size = 32
+
+[profiles.default.llm]
+provider = "ollama"
+model = "rnj-1"
+base_url = "http://localhost:11434"
+mode = "optional"
+stages = ["rerank", "evidence", "rationale"]
+
+[profiles.default.acquisition]
+order = ["cache", "zotero-storage", "zotero-api", "remote"]
+
+[profiles.default.remote]
+# Set a persistent profile only when legitimate browser-authenticated access is needed.
+playwright_profile = ""
+playwright_headless = true

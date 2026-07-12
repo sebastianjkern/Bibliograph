@@ -7,15 +7,23 @@
 *.pyo
 __pycache__/
 
-# Ignore all paracite specific temp files
+# Ignore all bibliograph specific temp files
 *.pdf
 *.json
 *.csv
 
-# Ignore all VS Code configuration files
+# Ignore all configuration files
 .vscode/
+.ruff_cache
+.pytest_cache
+.agents
 
 # Build and local development artifacts
 *.egg-info/
 .venv/
 bibliograph.db
+
+/build
+*.toml
+log.txt
+uv.lock

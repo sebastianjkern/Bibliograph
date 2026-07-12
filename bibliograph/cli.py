@@ -1,529 +1,264 @@
+"""Small CLI parser and dispatcher for Bibliograph workflows."""
+
+from __future__ import annotations
+
 import argparse
-import os
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
 
-from .config import (
-    DEFAULT_LLM_MODEL,
-    DEFAULT_OLLAMA_LLM_MODEL,
-    EMBEDDING_CONTENT_VERSION,
-    ollama_base_url,
-    openai_settings,
-)
-from .drafts import parse_draft_file
-from .embeddings import (
-    HashEmbedder,
-    OllamaEmbedder,
-    OpenAICompatibleEmbedder,
-    SentenceTransformerEmbedder,
-)
-from .export import sources_to_markdown, to_markdown
-from .ingest import index_pdf
+from .bootstrap import run_check, run_search, run_status, run_sync
 from .logging_utils import configure_logging, get_logger
-from .models import Paper
-from .ollama import OllamaClient
-from .reranker import HeuristicReranker, OpenAIReranker, rerank_matches
-from .retrieval import find_citations, find_claim_citations, find_claim_sources
-from .store import SQLiteIndex
-from .suggestions import (
-    OpenAIEvidenceExtractor,
-    OpenAISuggestionGenerator,
-    suggest_citations,
-)
-from .zotero_sync import MissingPaper, is_remote_downloadable_item, sync_collection
+from .providers.registry import chat_names, embedding_names
+from .render import render_sync
+from .settings import load_settings
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Find citation evidence in a local paper library.")
+    parser = argparse.ArgumentParser(
+        description="Find and verify citation evidence in a local Zotero-backed library."
+    )
+    parser.add_argument("--config", type=Path, help="Path to bibliograph.toml")
+    parser.add_argument(
+        "--profile",
+        default="default",
+        help="Configuration profile (default: default)",
+    )
     parser.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
         default="INFO",
-        help="Console logging level (default: INFO)",
     )
     parser.add_argument("--quiet", action="store_true", help="Disable console progress logging")
-    parser.add_argument("--db", default="bibliograph.db", help="SQLite index path")
+    _add_runtime_overrides(parser)
     parser.add_argument(
         "--rebuild-db",
         action="store_true",
-        help="Clear the SQLite index before running the command",
+        help=argparse.SUPPRESS,
     )
-    parser.add_argument(
-        "--zotero-storage-dir",
-        default=None,
-        help="Local Zotero storage directory (usually .../storage)",
-    )
-    parser.add_argument(
-        "--embedding-provider",
-        choices=("hash", "sentence-transformers", "openai", "ollama"),
-        default="sentence-transformers",
-        help="Embedding backend (default: sentence-transformers)",
-    )
-    parser.add_argument(
-        "--model", help="Embedding model name for sentence-transformers or OpenAI-compatible APIs"
-    )
-    parser.add_argument("--embedding-base-url", help="Base URL for an embedding API")
-    parser.add_argument(
-        "--llm-provider",
-        choices=("openai", "ollama"),
-        default="openai",
-        help="LLM backend (default: openai)",
-    )
-    parser.add_argument("--llm-base-url", help="Override the selected LLM API base URL")
-    parser.add_argument(
-        "--embedding-cache-dir", help="Persistent cache directory for SentenceTransformers models"
-    )
-    parser.add_argument(
-        "--embedding-offline",
-        action="store_true",
-        default=None,
-        help="Load SentenceTransformers only from the local cache",
-    )
+
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    index = subparsers.add_parser("index-pdf", help="Index one PDF with its citation metadata")
-    index.add_argument("pdf", type=Path)
-    index.add_argument("--key", required=True, help="Zotero item key")
-    index.add_argument("--title", required=True)
-    index.add_argument("--author", action="append", default=[])
-    index.add_argument("--year")
-    index.add_argument("--doi")
-
-    download = subparsers.add_parser(
-        "download-pdf", help="Download one missing PDF attachment from Zotero"
+    sync = subparsers.add_parser(
+        "sync",
+        help="Synchronize a Zotero collection into the index",
     )
-    download.add_argument(
-        "--source",
-        choices=("zotero", "remote"),
-        default="remote",
-        help="PDF source (default: remote open-access resolver chain)",
-    )
-    download.add_argument(
-        "item_key", nargs="?", help="Optional Zotero parent item or attachment key"
-    )
-    identifier = download.add_mutually_exclusive_group()
-    identifier.add_argument("--doi", help="Resolve the Zotero item by DOI")
-    identifier.add_argument("--title", help="Resolve the Zotero item by exact title")
-    download.add_argument("--attachment-key", help="Select one PDF when the item has several")
-    download.add_argument("--output-dir", type=Path, default=Path("pdfs"))
-
-    suggest = subparsers.add_parser("suggest", help="Suggest citations for a draft file")
-    suggest.add_argument("draft", type=Path)
-    suggest.add_argument("--limit", type=int, default=5)
-    suggest.add_argument("--min-score", type=float, default=0.0)
-    suggest.add_argument("--output", type=Path)
-    suggest.add_argument("--llm-model", default=DEFAULT_LLM_MODEL)
-    suggest.add_argument(
-        "--no-llm",
+    sync.add_argument("collection", nargs="?", help="Collection key or exact name")
+    sync.add_argument(
+        "--rebuild",
         action="store_true",
-        help="Use deterministic rationales instead of the local LLM",
+        help="Build a replacement index and swap it in",
     )
-    suggest.add_argument(
-        "--no-evidence-extraction",
-        action="store_true",
-        help="Keep retrieved chunks instead of selecting exact evidence with the LLM",
-    )
+    _add_legacy_rebuild_argument(sync)
+    sync.add_argument("--output", type=Path, help="Write the synchronization summary to a file")
 
-    find_sources = subparsers.add_parser(
-        "find-sources",
-        aliases=("find",),
-        help="Find sources for one claim in the local vector index",
-    )
-    find_sources.add_argument("claim", help="Claim or question to search for")
-    find_sources.add_argument("--limit", type=int, default=5)
-    find_sources.add_argument("--min-score", type=float, default=0.0)
-    find_sources.add_argument("--output", type=Path)
-    find_sources.add_argument("--llm-model", default=DEFAULT_LLM_MODEL)
-    find_sources.add_argument("--no-rerank", action="store_true")
-    find_sources.add_argument(
-        "--no-evidence-extraction",
-        action="store_true",
-        help="Keep retrieved chunks instead of selecting exact evidence with the LLM",
-    )
+    search = subparsers.add_parser("search", help="Search indexed sources for one claim")
+    search.add_argument("claim")
+    _add_query_options(search)
 
     check = subparsers.add_parser(
-        "check", help="Sync one Zotero collection and check a Typst/LaTeX draft"
+        "check",
+        help="Check a LaTeX or Typst draft using the current index",
     )
     check.add_argument("draft", type=Path)
-    check.add_argument("collection", help="Zotero collection key or exact name")
-    check.add_argument("--pdf-dir", type=Path, default=Path("pdfs"))
-    check.add_argument("--limit", type=int, default=5)
-    check.add_argument("--min-score", type=float, default=0.0)
-    check.add_argument("--output", type=Path)
-    check.add_argument("--llm-model", default=DEFAULT_LLM_MODEL)
-    check.add_argument("--no-rerank", action="store_true", help="Skip LLM reranking")
-    check.add_argument(
-        "--no-evidence-extraction",
+    # A second positional preserves the former `check DRAFT COLLECTION` command
+    # for one release.  The handler explicitly runs sync before the read-only check.
+    check.add_argument("legacy_collection", nargs="?", help=argparse.SUPPRESS)
+    _add_legacy_rebuild_argument(check)
+    _add_query_options(check)
+
+    status = subparsers.add_parser(
+        "status",
+        help="Show index status and optional provider diagnostics",
+    )
+    status.add_argument(
+        "--probe",
         action="store_true",
-        help="Keep retrieved chunks instead of selecting exact evidence with the LLM",
+        help="Test configured provider capabilities",
     )
-    download_group = check.add_mutually_exclusive_group()
-    download_group.add_argument(
-        "--download-missing",
-        action="store_true",
-        dest="download_missing",
-        help="Download missing PDFs (enabled by default)",
+    status.add_argument("--output", type=Path, help="Write the status report to a file")
+
+    # One-release compatibility shims. They intentionally live only at the
+    # command boundary and delegate to the new read-only handlers.
+    legacy_search = subparsers.add_parser(
+        "find-sources",
+        aliases=("find",),
+        help="Deprecated; use search",
     )
-    download_group.add_argument(
-        "--no-download-missing",
-        action="store_false",
-        dest="download_missing",
-        help="Only report missing PDFs",
-    )
-    check.set_defaults(download_missing=True)
-    check.add_argument(
-        "--download-source",
-        choices=("zotero", "remote"),
-        default="remote",
-        help="Source used with --download-missing",
-    )
+    legacy_search.add_argument("claim")
+    _add_query_options(legacy_search)
+    legacy_search.set_defaults(command="legacy-search")
+
+    legacy_suggest = subparsers.add_parser("suggest", help="Deprecated; use check")
+    legacy_suggest.add_argument("draft", type=Path)
+    _add_query_options(legacy_suggest)
+    legacy_suggest.set_defaults(command="legacy-suggest")
     return parser
 
 
-def _embedder(
-    provider: str,
-    model: str | None,
-    base_url: str | None,
-    cache_dir: str | None,
-    offline: bool | None,
-):
-    if provider == "sentence-transformers":
-        return SentenceTransformerEmbedder.from_environment(model, cache_dir, offline)
-    if provider == "openai":
-        return OpenAICompatibleEmbedder.from_environment(model, base_url)
-    if provider == "ollama":
-        return OllamaEmbedder.from_environment(model, base_url)
-    return HashEmbedder()
+def _add_runtime_overrides(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--db", help="Override the configured index path")
+    parser.add_argument("--pdf-dir", help="Override the configured PDF cache directory")
+    parser.add_argument(
+        "--collection",
+        dest="configured_collection",
+        help="Override the configured collection",
+    )
+    parser.add_argument("--zotero-storage-dir", help="Override the local Zotero storage directory")
+    parser.add_argument("--embedding-provider", choices=embedding_names())
+    parser.add_argument("--embedding-model", "--model", dest="embedding_model")
+    parser.add_argument("--embedding-base-url")
+    parser.add_argument("--embedding-batch-size", type=int)
+    parser.add_argument("--embedding-cache-dir")
+    parser.add_argument("--embedding-offline", action="store_true", default=None)
+    parser.add_argument("--llm-provider", choices=chat_names())
+    parser.add_argument("--llm-model")
+    parser.add_argument("--llm-base-url")
+    parser.add_argument("--llm-mode", choices=("off", "optional", "required"))
 
 
-def _llm_model(args) -> str:
-    if args.llm_provider == "ollama" and args.llm_model == DEFAULT_LLM_MODEL:
-        return os.getenv("OLLAMA_LLM_MODEL") or DEFAULT_OLLAMA_LLM_MODEL
-    return args.llm_model
+def _add_legacy_rebuild_argument(parser: argparse.ArgumentParser) -> None:
+    """Accept the old flag after the command without broadening new command syntax."""
+
+    parser.add_argument(
+        "--rebuild-db",
+        action="store_true",
+        dest="subcommand_rebuild_db",
+        help=argparse.SUPPRESS,
+    )
 
 
-def _llm_client(args, json_mode: bool = True):
-    if args.llm_provider == "ollama":
-        return OllamaClient(args.llm_base_url or ollama_base_url(), json_mode=json_mode)
-    return None
-
-
-def _reranker(args):
-    if args.llm_provider == "ollama":
-        return OpenAIReranker(_llm_model(args), client=_llm_client(args))
-    api_key, base_url = openai_settings()
-    return OpenAIReranker(_llm_model(args), api_key, args.llm_base_url or base_url)
-
-
-def _evidence_extractor(args):
-    if args.llm_provider == "ollama":
-        return OpenAIEvidenceExtractor(_llm_model(args), client=_llm_client(args))
-    api_key, base_url = openai_settings()
-    return OpenAIEvidenceExtractor(_llm_model(args), api_key, args.llm_base_url or base_url)
-
-
-def _suggestion_generator(args):
-    if args.llm_provider == "ollama":
-        return OpenAISuggestionGenerator(
-            _llm_model(args), client=_llm_client(args, json_mode=False)
-        )
-    api_key, base_url = openai_settings()
-    return OpenAISuggestionGenerator(_llm_model(args), api_key, args.llm_base_url or base_url)
+def _add_query_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--limit", type=int, default=5)
+    parser.add_argument("--min-score", type=float, default=0.0)
+    parser.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="Use deterministic ranking and rationale",
+    )
+    parser.add_argument(
+        "--no-rerank",
+        action="store_true",
+        help="Disable only the LLM reranking stage",
+    )
+    parser.add_argument(
+        "--no-evidence-extraction",
+        action="store_true",
+        help="Disable only the LLM evidence-selection stage",
+    )
+    parser.add_argument("--output", type=Path)
 
 
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     args = build_parser().parse_args(argv)
     configure_logging(args.log_level, args.quiet)
-    console = Console()
     logger = get_logger("cli")
-    logger.info("Command: %s", args.command)
-    if args.command == "download-pdf":
-        logger.info("Downloading one PDF from %s", args.source)
-        if args.source == "remote":
-            if not args.doi:
-                raise ValueError("Remote downloads require --doi")
-            from .remote import RemoteDownloadError, download_remote_pdf
-
-            try:
-                result = download_remote_pdf(
-                    args.doi,
-                    args.output_dir,
-                    email=os.getenv("UNPAYWALL_EMAIL"),
-                    openalex_api_key=os.getenv("OPENALEX_API_KEY"),
-                    title=args.title,
-                    item_key=args.item_key,
-                )
-            except RemoteDownloadError as error:
-                logger.error("Automatic download failed: %s", error)
-                for hint in error.hints:
-                    logger.error("Manual download hint (%s): %s", hint.source, hint.url)
-                return 1
-        else:
-            from connections.reload_embeddings import download_pdf_for_item
-
-            result = download_pdf_for_item(
-                args.item_key,
-                str(args.output_dir),
-                args.attachment_key,
-                args.doi,
-                args.title,
-                args.zotero_storage_dir,
-            )
-        status = "Downloaded" if result.downloaded else "Already present"
-        logger.info("%s PDF: %s", status, result.path)
-        console.print(f"[green]{status}[/green]: {result.path}")
-        return 0
-
-    logger.info("Loading %s embedding backend", args.embedding_provider)
-    embedder = _embedder(
-        args.embedding_provider,
-        args.model,
-        args.embedding_base_url,
-        args.embedding_cache_dir,
-        args.embedding_offline,
-    )
-    embedding_id = getattr(embedder, "identity", None)
-    if embedding_id:
-        embedding_id = f"{embedding_id}:{EMBEDDING_CONTENT_VERSION}"
-    index = SQLiteIndex(args.db, embedding_id=embedding_id)
-    logger.info("Using persistent vector index: %s", args.db)
-    if args.rebuild_db:
-        logger.info("Rebuilding SQLite index from scratch")
-        index.rebuild()
-    if index.reindexed:
-        logger.info("Index cleared; local PDFs will be reindexed with the selected model")
     try:
-        if args.command == "index-pdf":
-            paper = Paper(args.key, args.title, tuple(args.author), args.year, args.doi)
-            logger.info("Extracting and indexing PDF: %s", args.pdf)
-            count = index_pdf(index, embedder, paper, args.pdf)
-            logger.info("Indexed %d chunks from %s", count, args.pdf)
-            print(f"Indexed {count} chunks from {args.pdf}")
+        settings = load_settings(args.config, args.profile, _settings_overrides(args))
+        logger.info("Command: %s", args.command)
+        legacy_rebuild = args.rebuild_db or getattr(args, "subcommand_rebuild_db", False)
+        if legacy_rebuild:
+            logger.warning("`--rebuild-db` is deprecated; use `sync --rebuild` instead")
+        if args.command == "sync":
+            result = run_sync(
+                settings,
+                collection=args.collection,
+                rebuild=args.rebuild or legacy_rebuild,
+            )
+            _emit(render_sync(result), args.output)
             return 0
 
-        if args.command in {"find-sources", "find"}:
-            logger.info("Searching local sources for claim")
-            matches = find_claim_sources(
+        if args.command in {"search", "legacy-search"}:
+            if args.command == "legacy-search":
+                logger.warning("`find-sources`/`find` is deprecated; use `search` instead")
+            if legacy_rebuild:
+                raise ValueError("`--rebuild-db` is only supported by `sync --rebuild`")
+            result = run_search(
+                settings,
                 args.claim,
-                index,
-                embedder,
                 limit=args.limit,
                 min_score=args.min_score,
+                no_llm=args.no_llm,
+                disabled_stages=_disabled_llm_stages(args),
             )
-            if not args.no_rerank:
-                logger.info("Reranking local sources with LLM model: %s", _llm_model(args))
-                try:
-                    matches = rerank_matches(
-                        matches,
-                        _reranker(args),
-                    )
-                except Exception as error:
-                    logger.warning("LLM reranking unavailable; using retrieval order: %s", error)
-                    matches = rerank_matches(matches, HeuristicReranker())
-            evidence_extractor = None
-            if not args.no_evidence_extraction:
-                logger.info("Selecting exact supporting passages with the LLM")
-                try:
-                    evidence_extractor = _evidence_extractor(args)
-                except Exception as error:
-                    logger.warning(
-                        "Evidence extraction unavailable; using retrieved chunks: %s", error
-                    )
-            output = sources_to_markdown(
-                matches,
-                evidence_extractor=evidence_extractor,
-                context_provider=index.context_for,
-            )
-            if args.output:
-                args.output.write_text(output, encoding="utf-8")
-                logger.info("Wrote report: %s", args.output)
-            else:
-                console.print(Markdown(output))
+            _emit(result["markdown"], args.output)
             return 0
 
-        if args.command == "check":
-            from connections.reload_embeddings import find_collection_key, load_zotero_client
-
-            zotero = load_zotero_client()
-            logger.info("Resolving Zotero collection: %s", args.collection)
-            collection_key = find_collection_key(zotero, args.collection)
-            logger.info("Synchronizing collection %s", collection_key)
-            report = sync_collection(
-                zotero,
-                collection_key,
-                args.pdf_dir,
-                index,
-                embedder,
-                zotero_storage_dir=args.zotero_storage_dir,
-            )
-            logger.info(
-                "Sync complete: %d indexed, %d unchanged, %d missing",
-                len(report.indexed),
-                len(report.unchanged),
-                len(report.missing_papers),
-            )
-            if report.imported:
-                logger.info("Imported %d PDFs from local Zotero storage", len(report.imported))
-            downloaded: list[str] = []
-            if args.download_missing:
-                logger.info(
-                    "Downloading missing PDFs through the %s backend",
-                    args.download_source,
-                )
-                from connections.reload_embeddings import download_pdf_for_item
-
-                from .remote import download_remote_pdf
-
-                for missing in report.missing_papers:
-                    if args.download_source == "remote" and not is_remote_downloadable_item(
-                        missing.item_type
-                    ):
-                        logger.info(
-                            "Skipping remote PDF download for Zotero item type %s: %s",
-                            missing.item_type,
-                            missing.title,
-                        )
-                        continue
-                    try:
-                        if args.download_source == "remote":
-                            if not missing.doi:
-                                continue
-                            result = download_remote_pdf(
-                                missing.doi,
-                                args.pdf_dir,
-                                email=os.getenv("UNPAYWALL_EMAIL"),
-                                openalex_api_key=os.getenv("OPENALEX_API_KEY"),
-                                title=missing.title,
-                                item_key=missing.item_key,
-                            )
-                        else:
-                            result = download_pdf_for_item(
-                                missing.item_key,
-                                str(args.pdf_dir),
-                                missing.attachment_keys[0] if missing.attachment_keys else None,
-                                zotero_storage_dir=args.zotero_storage_dir,
-                            )
-                    except (FileNotFoundError, ValueError) as error:
-                        logger.warning("Could not download missing paper: %s", missing.title)
-                        for hint in getattr(error, "hints", ()):
-                            logger.warning("Manual download hint (%s): %s", hint.source, hint.url)
-                        continue
-                    downloaded.append(result.path)
-                    logger.info("Downloaded: %s", result.path)
-                if downloaded:
-                    logger.info("Re-synchronizing downloaded PDFs")
-                    report = sync_collection(
-                        zotero,
-                        collection_key,
-                        args.pdf_dir,
-                        index,
-                        embedder,
-                        zotero_storage_dir=args.zotero_storage_dir,
-                    )
-            logger.info("Parsing draft and retrieving claim evidence: %s", args.draft)
-            matches = find_claim_citations(
-                parse_draft_file(args.draft),
-                index,
-                embedder,
-                limit=args.limit,
-                min_score=args.min_score,
-            )
-            if not args.no_rerank:
-                logger.info("Reranking evidence with LLM model: %s", _llm_model(args))
-                try:
-                    matches = rerank_matches(
-                        matches,
-                        _reranker(args),
-                    )
-                except Exception as error:
-                    logger.warning("LLM reranking unavailable; using retrieval order: %s", error)
-                    matches = rerank_matches(matches, HeuristicReranker())
-            else:
-                matches = rerank_matches(matches, HeuristicReranker())
-            evidence_extractor = None
-            if not args.no_evidence_extraction:
-                logger.info("Selecting exact supporting passages with the LLM")
-                try:
-                    evidence_extractor = _evidence_extractor(args)
-                except Exception as error:
-                    logger.warning(
-                        "Evidence extraction unavailable; using retrieved chunks: %s", error
-                    )
-            output = to_markdown(
-                suggest_citations(
-                    matches,
-                    evidence_extractor=evidence_extractor,
-                    context_provider=index.context_for,
-                )
-            )
-            summary = (
-                f"Indexed: {len(report.indexed)} | Unchanged: {len(report.unchanged)} | "
-                f"Imported: {len(report.imported)} | "
-                f"Missing papers: {len(report.missing_papers)} | "
-                f"Downloaded: {len(downloaded)}\n"
-            )
-            if report.missing_papers:
-                summary += (
-                    "Missing papers:\n"
-                    + "\n".join(_format_missing_paper(paper) for paper in report.missing_papers)
-                    + "\n"
-                )
-            output = summary + "\n" + output
-            if args.output:
-                args.output.write_text(output, encoding="utf-8")
-                logger.info("Wrote report: %s", args.output)
-            else:
-                logger.info("Writing report to console")
-                console.print(Markdown(output))
-            return 0
-
-        logger.info("Retrieving citations from draft: %s", args.draft)
-        matches = find_citations(
-            args.draft.read_text(encoding="utf-8"),
-            index,
-            embedder,
-            limit=args.limit,
-            min_score=args.min_score,
-        )
-        generator = None
-        if not args.no_llm:
-            try:
-                generator = _suggestion_generator(args)
-            except Exception as error:
+        if args.command in {"check", "legacy-suggest"}:
+            if args.command == "legacy-suggest":
+                logger.warning("`suggest` is deprecated; use `check` instead")
+            if args.command == "check" and args.legacy_collection:
                 logger.warning(
-                    "LLM suggestions unavailable; using deterministic rationales: %s", error
+                    "`check DRAFT COLLECTION` is deprecated; run `sync COLLECTION` "
+                    "then `check DRAFT`"
                 )
-        evidence_extractor = None
-        if not args.no_llm and not args.no_evidence_extraction:
-            try:
-                evidence_extractor = _evidence_extractor(args)
-            except Exception as error:
-                logger.warning("Evidence extraction unavailable; using retrieved chunks: %s", error)
-        output = to_markdown(
-            suggest_citations(
-                matches,
-                generator,
-                args.min_score,
-                evidence_extractor=evidence_extractor,
-                context_provider=index.context_for,
+                sync_result = run_sync(
+                    settings,
+                    collection=args.legacy_collection,
+                    rebuild=legacy_rebuild,
+                )
+                logger.info("Legacy sync indexed %d documents", len(sync_result["indexed"]))
+            elif legacy_rebuild:
+                raise ValueError("`--rebuild-db` is only supported by `sync --rebuild`")
+            result = run_check(
+                settings,
+                args.draft,
+                limit=args.limit,
+                min_score=args.min_score,
+                no_llm=args.no_llm,
+                disabled_stages=_disabled_llm_stages(args),
             )
-        )
-        if args.output:
-            args.output.write_text(output, encoding="utf-8")
-            logger.info("Wrote report: %s", args.output)
-        else:
-            logger.info("Writing report to console")
-            console.print(Markdown(output))
-        return 0
-    finally:
-        index.close()
+            _emit(result["markdown"], args.output)
+            return 0
+
+        if args.command == "status":
+            if legacy_rebuild:
+                raise ValueError("`--rebuild-db` is only supported by `sync --rebuild`")
+            result = run_status(settings, probe=args.probe)
+            _emit(result["markdown"], args.output)
+            return 0
+        raise ValueError(f"Unsupported command: {args.command}")
+    except Exception as error:
+        logger.error("%s", error)
+        return 1
 
 
-def _format_missing_paper(paper: MissingPaper) -> str:
-    doi = f" — DOI: {paper.doi}" if paper.doi else ""
-    keys = f" — attachments: {', '.join(paper.attachment_keys)}" if paper.attachment_keys else ""
-    return f"- {paper.title}{doi}{keys}"
+def _settings_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    values = {
+        "db": args.db,
+        "pdf_dir": args.pdf_dir,
+        "collection": args.configured_collection,
+        "zotero_storage_dir": args.zotero_storage_dir,
+        "embedding_provider": args.embedding_provider,
+        "embedding_model": args.embedding_model,
+        "embedding_base_url": args.embedding_base_url,
+        "embedding_batch_size": args.embedding_batch_size,
+        "embedding_cache_dir": args.embedding_cache_dir,
+        "embedding_offline": args.embedding_offline,
+        "llm_provider": args.llm_provider,
+        "llm_model": args.llm_model,
+        "llm_base_url": args.llm_base_url,
+        "llm_mode": args.llm_mode,
+    }
+    return {key: value for key, value in values.items() if value is not None}
+
+
+def _disabled_llm_stages(args: argparse.Namespace) -> tuple[str, ...]:
+    stages: list[str] = []
+    if args.no_rerank:
+        stages.append("rerank")
+    if args.no_evidence_extraction:
+        stages.append("evidence")
+    return tuple(stages)
+
+
+def _emit(markdown: str, output: Path | None) -> None:
+    if output is not None:
+        output.write_text(markdown, encoding="utf-8")
+        get_logger("cli").info("Wrote report: %s", output)
+    else:
+        Console().print(Markdown(markdown))

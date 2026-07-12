@@ -9,17 +9,38 @@ description = "Semantic citation discovery for Zotero libraries and paper drafts
 requires-python = ">=3.12"
 dependencies = [
     "sqlite-vec>=0.1.9",
+    "python-dotenv>=1.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+pdf = [
+    "PyMuPDF>=1.24",
+]
+zotero = [
+    "pyzotero>=1.5",
+]
+local-embeddings = [
+    "sentence-transformers>=3.0",
+]
+openai = [
+    "openai>=1.40",
+]
+remote = [
     "doidownloader>=0.1.0",
     "pyDOI>=0.2.1",
+    "playwright>=1.50",
+]
+all = [
     "PyMuPDF>=1.24",
     "pyzotero>=1.5",
-    "python-dotenv>=1.0",
-    "numpy>=1.26",
-    "openai>=1.40",
     "sentence-transformers>=3.0",
-    "streamlit>=1.36",
+    "openai>=1.40",
+    "doidownloader>=0.1.0",
+    "pyDOI>=0.2.1",
     "playwright>=1.50",
-    "rich>=13.0",
+]
+dev = [
     "pytest>=8.0",
     "ruff>=0.6",
 ]
@@ -28,11 +49,11 @@ dependencies = [
 bibliograph = "bibliograph.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["bibliograph*", "connections*"]
+include = ["bibliograph*"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
