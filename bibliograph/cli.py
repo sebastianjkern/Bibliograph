@@ -6,13 +6,25 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
 
-from .config import DEFAULT_LLM_MODEL, EMBEDDING_CONTENT_VERSION, openai_settings
+from .config import (
+    DEFAULT_LLM_MODEL,
+    DEFAULT_OLLAMA_LLM_MODEL,
+    EMBEDDING_CONTENT_VERSION,
+    ollama_base_url,
+    openai_settings,
+)
 from .drafts import parse_draft_file
-from .embeddings import HashEmbedder, OpenAICompatibleEmbedder, SentenceTransformerEmbedder
+from .embeddings import (
+    HashEmbedder,
+    OllamaEmbedder,
+    OpenAICompatibleEmbedder,
+    SentenceTransformerEmbedder,
+)
 from .export import sources_to_markdown, to_markdown
 from .ingest import index_pdf
 from .logging_utils import configure_logging, get_logger
 from .models import Paper
+from .ollama import OllamaClient
 from .reranker import HeuristicReranker, OpenAIReranker, rerank_matches
 from .retrieval import find_citations, find_claim_citations, find_claim_sources
 from .store import SQLiteIndex
@@ -41,14 +53,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--embedding-provider",
-        choices=("hash", "sentence-transformers", "openai"),
+        choices=("hash", "sentence-transformers", "openai", "ollama"),
         default="sentence-transformers",
         help="Embedding backend (default: sentence-transformers)",
     )
     parser.add_argument(
         "--model", help="Embedding model name for sentence-transformers or OpenAI-compatible APIs"
     )
-    parser.add_argument("--embedding-base-url", help="Base URL for an OpenAI-compatible API")
+    parser.add_argument("--embedding-base-url", help="Base URL for an embedding API")
+    parser.add_argument(
+        "--llm-provider",
+        choices=("openai", "ollama"),
+        default="openai",
+        help="LLM backend (default: openai)",
+    )
+    parser.add_argument("--llm-base-url", help="Override the selected LLM API base URL")
     parser.add_argument(
         "--embedding-cache-dir", help="Persistent cache directory for SentenceTransformers models"
     )
@@ -72,7 +91,9 @@ def build_parser() -> argparse.ArgumentParser:
         "download-pdf", help="Download one missing PDF attachment from Zotero"
     )
     download.add_argument(
-        "--source", choices=("zotero", "remote"), default="remote",
+        "--source",
+        choices=("zotero", "remote"),
+        default="remote",
         help="PDF source (default: remote open-access resolver chain)",
     )
     download.add_argument(
@@ -168,7 +189,44 @@ def _embedder(
         return SentenceTransformerEmbedder.from_environment(model, cache_dir, offline)
     if provider == "openai":
         return OpenAICompatibleEmbedder.from_environment(model, base_url)
+    if provider == "ollama":
+        return OllamaEmbedder.from_environment(model, base_url)
     return HashEmbedder()
+
+
+def _llm_model(args) -> str:
+    if args.llm_provider == "ollama" and args.llm_model == DEFAULT_LLM_MODEL:
+        return os.getenv("OLLAMA_LLM_MODEL") or DEFAULT_OLLAMA_LLM_MODEL
+    return args.llm_model
+
+
+def _llm_client(args, json_mode: bool = True):
+    if args.llm_provider == "ollama":
+        return OllamaClient(args.llm_base_url or ollama_base_url(), json_mode=json_mode)
+    return None
+
+
+def _reranker(args):
+    if args.llm_provider == "ollama":
+        return OpenAIReranker(_llm_model(args), client=_llm_client(args))
+    api_key, base_url = openai_settings()
+    return OpenAIReranker(_llm_model(args), api_key, args.llm_base_url or base_url)
+
+
+def _evidence_extractor(args):
+    if args.llm_provider == "ollama":
+        return OpenAIEvidenceExtractor(_llm_model(args), client=_llm_client(args))
+    api_key, base_url = openai_settings()
+    return OpenAIEvidenceExtractor(_llm_model(args), api_key, args.llm_base_url or base_url)
+
+
+def _suggestion_generator(args):
+    if args.llm_provider == "ollama":
+        return OpenAISuggestionGenerator(
+            _llm_model(args), client=_llm_client(args, json_mode=False)
+        )
+    api_key, base_url = openai_settings()
+    return OpenAISuggestionGenerator(_llm_model(args), api_key, args.llm_base_url or base_url)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -249,12 +307,11 @@ def main(argv: list[str] | None = None) -> int:
                 min_score=args.min_score,
             )
             if not args.no_rerank:
-                logger.info("Reranking local sources with LLM model: %s", args.llm_model)
+                logger.info("Reranking local sources with LLM model: %s", _llm_model(args))
                 try:
-                    api_key, base_url = openai_settings()
                     matches = rerank_matches(
                         matches,
-                        OpenAIReranker(args.llm_model, api_key, base_url),
+                        _reranker(args),
                     )
                 except Exception as error:
                     logger.warning("LLM reranking unavailable; using retrieval order: %s", error)
@@ -263,12 +320,7 @@ def main(argv: list[str] | None = None) -> int:
             if not args.no_evidence_extraction:
                 logger.info("Selecting exact supporting passages with the LLM")
                 try:
-                    api_key, base_url = openai_settings()
-                    evidence_extractor = OpenAIEvidenceExtractor(
-                        args.llm_model,
-                        api_key,
-                        base_url,
-                    )
+                    evidence_extractor = _evidence_extractor(args)
                 except Exception as error:
                     logger.warning(
                         "Evidence extraction unavailable; using retrieved chunks: %s", error
@@ -344,9 +396,7 @@ def main(argv: list[str] | None = None) -> int:
                             result = download_pdf_for_item(
                                 missing.item_key,
                                 str(args.pdf_dir),
-                                missing.attachment_keys[0]
-                                if missing.attachment_keys
-                                else None,
+                                missing.attachment_keys[0] if missing.attachment_keys else None,
                                 zotero_storage_dir=args.zotero_storage_dir,
                             )
                     except (FileNotFoundError, ValueError) as error:
@@ -375,16 +425,11 @@ def main(argv: list[str] | None = None) -> int:
                 min_score=args.min_score,
             )
             if not args.no_rerank:
-                logger.info("Reranking evidence with LLM model: %s", args.llm_model)
+                logger.info("Reranking evidence with LLM model: %s", _llm_model(args))
                 try:
-                    api_key, base_url = openai_settings()
                     matches = rerank_matches(
                         matches,
-                        OpenAIReranker(
-                            args.llm_model,
-                            api_key,
-                            base_url,
-                        ),
+                        _reranker(args),
                     )
                 except Exception as error:
                     logger.warning("LLM reranking unavailable; using retrieval order: %s", error)
@@ -395,12 +440,7 @@ def main(argv: list[str] | None = None) -> int:
             if not args.no_evidence_extraction:
                 logger.info("Selecting exact supporting passages with the LLM")
                 try:
-                    api_key, base_url = openai_settings()
-                    evidence_extractor = OpenAIEvidenceExtractor(
-                        args.llm_model,
-                        api_key,
-                        base_url,
-                    )
+                    evidence_extractor = _evidence_extractor(args)
                 except Exception as error:
                     logger.warning(
                         "Evidence extraction unavailable; using retrieved chunks: %s", error
@@ -419,9 +459,11 @@ def main(argv: list[str] | None = None) -> int:
                 f"Downloaded: {len(downloaded)}\n"
             )
             if report.missing_papers:
-                summary += "Missing papers:\n" + "\n".join(
-                    _format_missing_paper(paper) for paper in report.missing_papers
-                ) + "\n"
+                summary += (
+                    "Missing papers:\n"
+                    + "\n".join(_format_missing_paper(paper) for paper in report.missing_papers)
+                    + "\n"
+                )
             output = summary + "\n" + output
             if args.output:
                 args.output.write_text(output, encoding="utf-8")
@@ -442,12 +484,7 @@ def main(argv: list[str] | None = None) -> int:
         generator = None
         if not args.no_llm:
             try:
-                api_key, base_url = openai_settings()
-                generator = OpenAISuggestionGenerator(
-                    args.llm_model,
-                    api_key,
-                    base_url,
-                )
+                generator = _suggestion_generator(args)
             except Exception as error:
                 logger.warning(
                     "LLM suggestions unavailable; using deterministic rationales: %s", error
@@ -455,12 +492,7 @@ def main(argv: list[str] | None = None) -> int:
         evidence_extractor = None
         if not args.no_llm and not args.no_evidence_extraction:
             try:
-                api_key, base_url = openai_settings()
-                evidence_extractor = OpenAIEvidenceExtractor(
-                    args.llm_model,
-                    api_key,
-                    base_url,
-                )
+                evidence_extractor = _evidence_extractor(args)
             except Exception as error:
                 logger.warning("Evidence extraction unavailable; using retrieved chunks: %s", error)
         output = to_markdown(

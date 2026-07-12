@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 from bibliograph.chunking import chunk_pages, split_text
 from bibliograph.embeddings import (
     HashEmbedder,
+    OllamaEmbedder,
     OpenAICompatibleEmbedder,
     SentenceTransformerEmbedder,
 )
@@ -71,6 +72,15 @@ def test_openai_compatible_embedder_sorts_results_and_tracks_dimension():
     assert embedder.dimension == 2
 
 
+def test_ollama_embedder_uses_native_client_and_identity():
+    client = _EmbeddingClient()
+    client.base_url = "http://ollama.test"
+    embedder = OllamaEmbedder("local-embedder", client=client)
+
+    assert embedder.embed(["first", "second"]) == [[1.0, 0.0], [0.0, 1.0]]
+    assert embedder.identity == "ollama:http://ollama.test:local-embedder"
+
+
 def test_sqlite_vec_index_persists_across_reopen():
     paper = Paper("PERSIST", "Persistent Paper")
     chunk = chunk_pages(paper, [(2, "persistent vector evidence")], max_words=20, overlap_words=2)
@@ -134,15 +144,19 @@ def test_sentence_transformer_uses_persistent_cache_and_offline_mode(monkeypatch
         def get_sentence_embedding_dimension(self):
             return 3
 
-    monkeypatch.setitem(__import__("sys").modules, "sentence_transformers", type(
-        "SentenceTransformers", (), {"SentenceTransformer": FakeModel}
-    ))
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "sentence_transformers",
+        type("SentenceTransformers", (), {"SentenceTransformer": FakeModel}),
+    )
     monkeypatch.setenv("SENTENCE_TRANSFORMERS_CACHE", ".cache/models")
 
     embedder = SentenceTransformerEmbedder.from_environment(local_files_only=True)
 
     assert embedder.cache_dir == ".cache/models"
-    assert calls == [(
-        "all-MiniLM-L6-v2",
-        {"cache_folder": ".cache/models", "local_files_only": True},
-    )]
+    assert calls == [
+        (
+            "all-MiniLM-L6-v2",
+            {"cache_folder": ".cache/models", "local_files_only": True},
+        )
+    ]

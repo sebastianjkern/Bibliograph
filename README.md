@@ -62,6 +62,28 @@ OPENAI_BASE_URL=http://localhost:1234/v1
 
 For another OpenAI-compatible server, change `OPENAI_API_KEY` and `OPENAI_BASE_URL`.
 
+## Configure Ollama
+
+Bibliograph can also call Ollama's native chat and embedding APIs. Start Ollama and pull models:
+
+```bash
+ollama pull llama3.2
+ollama pull nomic-embed-text
+```
+
+Then select Ollama before the subcommand:
+
+```bash
+uv run bibliograph \
+  --embedding-provider ollama \
+  --llm-provider ollama \
+  find-sources "Road infrastructure improves regional market access"
+```
+
+The defaults are `llama3.2`, `nomic-embed-text`, and `http://localhost:11434`. Override them with
+`--llm-model`, `--model`, `--llm-base-url`, `--embedding-base-url`, or the `OLLAMA_HOST`,
+`OLLAMA_LLM_MODEL`, and `OLLAMA_EMBEDDING_MODEL` environment variables.
+
 ## Common workflows
 
 Create a draft such as `example.tex` or `example.typ`.
@@ -188,6 +210,7 @@ Changing the embedding model or structured PDF-processing version automatically 
 - PyMuPDF-based cleanup of repeated headers, footers, page numbers, and references.
 - Section-aware, sentence-based embedding chunks.
 - SentenceTransformer, deterministic hash, and OpenAI-compatible embeddings.
+- Native Ollama chat and embedding APIs.
 - Persistent SQLite/sqlite-vec vector search.
 - LLM-assisted reranking with a deterministic fallback.
 - Grounded evidence extraction from nearby indexed context with exact-quote validation.

@@ -42,8 +42,7 @@ class GroundedTemplateGenerator:
 
     def explain(self, draft_text: str, evidence: str) -> str:
         return (
-            "Retrieved evidence overlaps with the draft passage; "
-            "verify the source before citing."
+            "Retrieved evidence overlaps with the draft passage; verify the source before citing."
         )
 
 
@@ -53,14 +52,16 @@ class OpenAISuggestionGenerator:
         model: str,
         api_key: str = DEFAULT_OPENAI_API_KEY,
         base_url: str | None = None,
+        client=None,
     ):
-        from openai import OpenAI
+        if client is None:
+            from openai import OpenAI
 
-        kwargs = {
-            "api_key": api_key or DEFAULT_OPENAI_API_KEY,
-            "base_url": base_url or DEFAULT_OPENAI_BASE_URL,
-        }
-        self.client = OpenAI(**kwargs)
+            client = OpenAI(
+                api_key=api_key or DEFAULT_OPENAI_API_KEY,
+                base_url=base_url or DEFAULT_OPENAI_BASE_URL,
+            )
+        self.client = client
         self.model = model
 
     def explain(self, draft_text: str, evidence: str) -> str:
@@ -101,9 +102,7 @@ class OpenAIEvidenceExtractor:
         self.client = client
         self.model = model
 
-    def extract(
-        self, draft_text: str, source: CitationSource, context: str
-    ) -> EvidenceSelection:
+    def extract(self, draft_text: str, source: CitationSource, context: str) -> EvidenceSelection:
         messages = [
             {
                 "role": "system",
@@ -177,8 +176,7 @@ def suggest_citations(
         source = eligible[0]
         evidence = source.chunk.text
         rationale = (
-            "Retrieved evidence overlaps with the draft passage; "
-            "verify the source before citing."
+            "Retrieved evidence overlaps with the draft passage; verify the source before citing."
         )
         selected_rationale = ""
         if evidence_extractor is not None and context_provider is not None:
@@ -238,9 +236,7 @@ def suggest_citations(
 
 def _parse_evidence_payload(content: str | list[dict]) -> dict:
     if isinstance(content, list):
-        content = "".join(
-            part.get("text", "") for part in content if isinstance(part, dict)
-        )
+        content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
     if not isinstance(content, str):
         raise ValueError("LLM evidence response content is not text")
     cleaned = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)

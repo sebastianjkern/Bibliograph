@@ -1,4 +1,4 @@
-from bibliograph.cli import build_parser, main
+from bibliograph.cli import _llm_model, build_parser, main
 from bibliograph.remote import ManualDownloadHint, RemoteDownloadError
 
 
@@ -33,6 +33,25 @@ def test_cli_has_local_first_defaults():
     assert args.download_source == "remote"
     assert args.llm_model == "essentialai/rnj-1"
     assert args.output is None
+
+
+def test_cli_accepts_native_ollama_backends():
+    args = build_parser().parse_args(
+        [
+            "--embedding-provider",
+            "ollama",
+            "--model",
+            "nomic-embed-text",
+            "--llm-provider",
+            "ollama",
+            "find-sources",
+            "local models",
+        ]
+    )
+
+    assert args.embedding_provider == "ollama"
+    assert args.llm_provider == "ollama"
+    assert _llm_model(args) == "llama3.2"
 
 
 def test_cli_reports_manual_hint_for_failed_remote_download(monkeypatch):

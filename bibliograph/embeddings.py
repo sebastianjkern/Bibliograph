@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .config import (
+    DEFAULT_OLLAMA_EMBEDDING_MODEL,
     DEFAULT_OPENAI_API_KEY,
     DEFAULT_OPENAI_BASE_URL,
     DEFAULT_OPENAI_EMBEDDING_MODEL,
@@ -81,8 +82,10 @@ class SentenceTransformerEmbedder:
 
 
 def _sentence_transformer_cache_dir() -> str:
-    return os.getenv("SENTENCE_TRANSFORMERS_CACHE") or os.getenv("HF_HOME") or str(
-        Path.home() / ".cache" / "huggingface"
+    return (
+        os.getenv("SENTENCE_TRANSFORMERS_CACHE")
+        or os.getenv("HF_HOME")
+        or str(Path.home() / ".cache" / "huggingface")
     )
 
 
@@ -145,3 +148,22 @@ class OpenAICompatibleEmbedder:
         if any(len(vector) != self.dimension for vector in vectors):
             raise ValueError("Embedding service returned inconsistent vector dimensions")
         return vectors
+
+
+class OllamaEmbedder(OpenAICompatibleEmbedder):
+    """Embed text through Ollama's native ``/api/embed`` endpoint."""
+
+    def __init__(self, model: str, base_url: str | None = None, client=None):
+        if client is None:
+            from .ollama import OllamaClient
+
+            client = OllamaClient(base_url)
+        super().__init__(model, "ollama", base_url, client)
+        self.base_url = client.base_url
+        self.identity = f"ollama:{self.base_url}:{model}"
+
+    @classmethod
+    def from_environment(cls, model: str | None = None, base_url: str | None = None):
+        return cls(
+            model or os.getenv("OLLAMA_EMBEDDING_MODEL") or DEFAULT_OLLAMA_EMBEDDING_MODEL, base_url
+        )
