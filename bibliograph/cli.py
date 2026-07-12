@@ -47,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quiet", action="store_true", help="Disable console progress logging")
     parser.add_argument("--db", default="bibliograph.db", help="SQLite index path")
     parser.add_argument(
+        "--rebuild-db",
+        action="store_true",
+        help="Clear the SQLite index before running the command",
+    )
+    parser.add_argument(
         "--zotero-storage-dir",
         default=None,
         help="Local Zotero storage directory (usually .../storage)",
@@ -286,6 +291,9 @@ def main(argv: list[str] | None = None) -> int:
         embedding_id = f"{embedding_id}:{EMBEDDING_CONTENT_VERSION}"
     index = SQLiteIndex(args.db, embedding_id=embedding_id)
     logger.info("Using persistent vector index: %s", args.db)
+    if args.rebuild_db:
+        logger.info("Rebuilding SQLite index from scratch")
+        index.rebuild()
     if index.reindexed:
         logger.info("Index cleared; local PDFs will be reindexed with the selected model")
     try:

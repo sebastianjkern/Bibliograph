@@ -163,6 +163,10 @@ class SQLiteIndex:
     def close(self) -> None:
         self.connection.close()
 
+    def rebuild(self) -> None:
+        """Clear all indexed content so the database can be rebuilt from scratch."""
+        self._reset()
+
     def context_for(self, chunk: TextChunk, window: int = 1, max_words: int = 600) -> str:
         """Return nearby indexed chunks from the same paper for grounded quote selection."""
         if window < 0 or max_words <= 0:

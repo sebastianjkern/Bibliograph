@@ -118,6 +118,20 @@ def test_changing_embedding_identity_clears_persistent_index_for_reindexing():
         changed.close()
 
 
+def test_rebuild_clears_existing_index_contents():
+    paper = Paper("REBUILD", "Rebuild Paper")
+    chunk = chunk_pages(paper, [(1, "rebuildable evidence")], max_words=20, overlap_words=2)
+    embedder = HashEmbedder()
+    index = SQLiteIndex(":memory:")
+    index.upsert(chunk, embedder.embed([item.text for item in chunk]))
+    index.mark_file_indexed("REBUILD", 1, __file__)
+
+    index.rebuild()
+
+    assert index.search(embedder.embed(["rebuildable evidence"])[0]) == []
+    assert index.needs_file_index("REBUILD", 1, __file__) is True
+
+
 def test_index_returns_neighboring_context_for_grounded_quote_selection():
     paper = Paper("CONTEXT", "Context Paper")
     chunks = [

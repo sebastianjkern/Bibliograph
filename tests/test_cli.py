@@ -29,6 +29,7 @@ def test_cli_accepts_direct_local_source_lookup():
 def test_cli_has_local_first_defaults():
     args = build_parser().parse_args(["check", "draft.tex", "Methods"])
     assert args.embedding_provider == "sentence-transformers"
+    assert args.rebuild_db is False
     assert args.download_missing is True
     assert args.download_source == "remote"
     assert args.llm_model == "essentialai/rnj-1"
@@ -52,6 +53,12 @@ def test_cli_accepts_native_ollama_backends():
     assert args.embedding_provider == "ollama"
     assert args.llm_provider == "ollama"
     assert _llm_model(args) == "llama3.2"
+
+
+def test_cli_accepts_db_rebuild_flag():
+    args = build_parser().parse_args(["--rebuild-db", "check", "draft.tex", "Methods"])
+
+    assert args.rebuild_db is True
 
 
 def test_cli_reports_manual_hint_for_failed_remote_download(monkeypatch):

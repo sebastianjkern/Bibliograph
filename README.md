@@ -182,6 +182,15 @@ Use a different database for another project:
 uv run bibliograph --db project-bibliography.db check example.tex "My Collection"
 ```
 
+Rebuild the current database from scratch before synchronizing a collection:
+
+```bash
+uv run bibliograph --rebuild-db check example.tex "My Collection"
+```
+
+This clears the selected SQLite index first, then lets `check` repopulate it from the collection's
+available PDFs.
+
 ## Embedding options
 
 The default embedding backend is the cached `all-MiniLM-L6-v2` SentenceTransformer model:
