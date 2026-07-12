@@ -18,7 +18,7 @@ from .providers.registry import chat_names, embedding_names, resolve_name
 
 type Settings = dict[str, Any]
 
-_LLM_STAGES = frozenset({"rerank", "evidence", "rationale"})
+_LLM_STAGES = frozenset({"expand", "rerank", "evidence", "rationale"})
 _ACQUISITION_STRATEGIES = frozenset({"cache", "zotero-storage", "zotero-api", "remote"})
 
 

@@ -8,6 +8,7 @@ callables or small stateful resources instead of selecting implementations.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,9 @@ from .commands.sync import sync_library
 from .logging_utils import get_logger
 from .pipeline.indexing import INDEXING_FINGERPRINT
 from .pipeline.llm_tasks import (
+    expand_query,
     explain,
+    heuristic_expand,
     heuristic_rerank,
     rerank,
     select_evidence,
@@ -40,7 +43,13 @@ from .settings import Settings
 logger = get_logger("bootstrap")
 
 
-def run_sync(settings: Settings, *, collection: str | None = None, rebuild: bool = False) -> dict:
+def run_sync(
+    settings: Settings,
+    *,
+    collection: str | None = None,
+    rebuild: bool = False,
+    show_progress: bool = True,
+) -> dict:
     embedding = build_embedding(settings)
     # A successful HTTP listener is insufficient: this performs a capability
     # request against the exact model before a staging rebuild is opened.
@@ -66,6 +75,7 @@ def run_sync(settings: Settings, *, collection: str | None = None, rebuild: bool
                 chunk_document=chunk_document,
                 storage_dirs=storage_dirs,
                 collection=collection,
+                show_progress=show_progress,
             )
 
     with SQLiteStore(
@@ -85,6 +95,7 @@ def run_sync(settings: Settings, *, collection: str | None = None, rebuild: bool
             chunk_document=chunk_document,
             storage_dirs=storage_dirs,
             collection=collection,
+            show_progress=show_progress,
         )
 
 
@@ -96,6 +107,8 @@ def run_search(
     min_score: float = 0.0,
     no_llm: bool = False,
     disabled_stages: Iterable[str] = (),
+    show_progress: bool = True,
+    enrich: bool = True,
 ) -> dict:
     embedding = build_embedding(settings)
     with SQLiteStore(settings["db"], mode="read") as store:
@@ -111,6 +124,8 @@ def run_search(
             ),
             limit=limit,
             min_score=min_score,
+            show_progress=show_progress,
+            enrich=enrich,
         )
 
 
@@ -122,6 +137,8 @@ def run_check(
     min_score: float = 0.0,
     no_llm: bool = False,
     disabled_stages: Iterable[str] = (),
+    show_progress: bool = True,
+    enrich: bool = True,
 ) -> dict:
     embedding = build_embedding(settings)
     with SQLiteStore(settings["db"], mode="read") as store:
@@ -137,6 +154,8 @@ def run_check(
             ),
             limit=limit,
             min_score=min_score,
+            show_progress=show_progress,
+            enrich=enrich,
         )
 
 
@@ -180,6 +199,7 @@ def _llm_tools(
         if mode == "required":
             return primary
 
+        @wraps(primary)
         def run(*args, **kwargs):
             try:
                 return primary(*args, **kwargs)
@@ -193,8 +213,23 @@ def _llm_tools(
     if "rerank" in stages:
         tools["rerank"] = optional(
             "reranking",
-            lambda claim, hits: rerank(claim, hits, complete=complete),
+            lambda claim, hits, progress=None: rerank(
+                claim,
+                hits,
+                complete=complete,
+                progress=progress,
+            ),
             fallbacks["rerank"],
+        )
+    if "expand" in stages:
+        tools["expand"] = optional(
+            "query expansion",
+            lambda claim, progress=None: expand_query(
+                claim,
+                complete=complete,
+                progress=progress,
+            ),
+            fallbacks["expand"],
         )
     if "evidence" in stages:
         tools["select_evidence"] = optional(
@@ -215,6 +250,8 @@ def _deterministic_llm_tools(stages: set[str]) -> dict[str, Callable]:
     """Return only the deterministic fallbacks selected by configured stages."""
 
     tools: dict[str, Callable] = {}
+    if "expand" in stages:
+        tools["expand"] = heuristic_expand
     if "rerank" in stages:
         tools["rerank"] = heuristic_rerank
     if "evidence" in stages:

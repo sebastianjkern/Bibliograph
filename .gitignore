@@ -16,12 +16,15 @@ __pycache__/
 .vscode/
 .ruff_cache
 .pytest_cache
+.pytest-codex
 .agents
 
 # Build and local development artifacts
 *.egg-info/
 .venv/
 bibliograph.db
+
+FEATURES.md
 
 /build
 *.toml

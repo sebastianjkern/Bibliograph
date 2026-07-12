@@ -29,10 +29,14 @@ def _render_source_card(number: int, item: dict, *, include_claim: bool = False)
     lines = [
         f"## {number}. {citation_label(paper)}",
         "",
-        f"- **Title:** {paper.title}",
-        f"- **Support score:** `{item['score']:.2f}`",
-        f"- **DOI:** {paper.doi or 'unknown'}",
-        f"- **Page:** {chunk.page or 'unknown'}",
+        "| Detail | Value |",
+        "| :--- | :--- |",
+        f"| **Title** | {_table_cell(paper.title)} |",
+        f"| **Vector similarity** | {item.get('vector_score', item['score']):.2f} |",
+        f"| **Lexical closeness** | {item.get('lexical_score', 0.0):.2f} |",
+        f"| **Rerank support** | {item.get('rerank_score', item['score']):.2f} |",
+        f"| **DOI** | {_table_cell(paper.doi or 'unknown')} |",
+        f"| **Page** | {chunk.page or 'unknown'} |",
     ]
     if include_claim:
         lines.extend(
@@ -56,9 +60,14 @@ def _render_source_card(number: int, item: dict, *, include_claim: bool = False)
     return lines
 
 
+def _table_cell(value: str) -> str:
+    return " ".join(value.split()).replace("|", "\\|")
+
+
 def _sorted_items(items: Iterable[dict]) -> list[dict]:
     enumerated = list(enumerate(items))
-    return [item for _index, item in sorted(enumerated, key=lambda pair: (-pair[1]["score"], pair[0]))]
+    ordered = sorted(enumerated, key=lambda pair: (-pair[1]["score"], pair[0]))
+    return [item for _index, item in ordered]
 
 
 def render_status(status: dict) -> str:

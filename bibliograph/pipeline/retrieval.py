@@ -1,7 +1,9 @@
 """Injected text retrieval and LLM enrichment pipeline."""
 
-from collections.abc import Callable, Iterable, Sequence
 import re
+from collections.abc import Callable, Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from inspect import signature
 
 from ..domain import Chunk, Claim, ScoredChunk
 from .llm_tasks import heuristic_rerank, template_rationale
@@ -10,6 +12,8 @@ EmbedQueries = Callable[[Sequence[str]], list[list[float]]]
 Search = Callable[..., list[ScoredChunk]]
 ContextFor = Callable[[Chunk], str]
 Rerank = Callable[[str, Sequence[ScoredChunk]], list[ScoredChunk]]
+Expand = Callable[[str], list[str]]
+ProgressUpdate = Callable[[str], None]
 SelectEvidence = Callable[[str, ScoredChunk, str], tuple[str, str] | None]
 Explain = Callable[[str, str], str]
 
@@ -21,14 +25,161 @@ def search_claim(
     search: Search,
     limit: int = 5,
     min_score: float = 0.0,
+    expand: Expand | None = None,
     rerank: Rerank | None = None,
+    progress: ProgressUpdate | None = None,
+    context_for: ContextFor | None = None,
+    select_evidence: SelectEvidence | None = None,
+    explain: Explain | None = None,
+    enrich: bool = True,
+    top_only: bool = False,
 ) -> dict:
     text = claim["text"].strip()
     if not text:
         raise ValueError("A claim is required")
-    vector = embed_queries([text])[0]
-    hits = [hit for hit in search(vector, limit=limit, query_text=text) if hit[1] >= min_score]
-    return {"claim": claim, "hits": (rerank or heuristic_rerank)(text, hits)}
+    variants = [text]
+    if expand is not None:
+        if progress is not None:
+            progress("Preparing query expansion")
+        seen_variants = {text.casefold()}
+        for expanded in _run_expander(expand, text, progress):
+            normalized = expanded.strip()
+            key = normalized.casefold()
+            if normalized and key not in seen_variants:
+                variants.append(normalized)
+                seen_variants.add(key)
+    vectors = embed_queries(variants)
+    if len(vectors) != len(variants):
+        raise ValueError("Embedding provider returned a different number of query vectors")
+    if progress is not None:
+        progress("Embedding expanded queries")
+
+    # Search each hypothesis independently, then retain the strongest score for
+    # each chunk. This avoids duplicate passages overwhelming the final reranker.
+    by_chunk: dict[str, ScoredChunk] = {}
+    score_details: dict[str, dict[str, float]] = {}
+    for index, (variant, vector) in enumerate(zip(variants, vectors, strict=True), start=1):
+        if progress is not None:
+            progress(f"Retrieving evidence · {index}/{len(variants)} queries")
+        for hit in search(vector, limit=limit, query_text=variant):
+            if hit[1] < min_score:
+                continue
+            key = hit[0].chunk_id
+            previous = by_chunk.get(key)
+            if previous is None or hit[1] > previous[1]:
+                by_chunk[key] = hit
+                score_details[key] = {
+                    "vector": float(getattr(hit[1], "semantic", hit[1])),
+                    "lexical": float(getattr(hit[1], "lexical", 0.0)),
+                    "retrieval": float(hit[1]),
+                }
+    hits = sorted(by_chunk.values(), key=lambda hit: hit[1], reverse=True)
+    if progress is not None:
+        progress("Reranking candidates")
+    reranker = rerank or heuristic_rerank
+    ordered_hits = _run_reranker(reranker, text, hits, progress)
+    selected_hits = _top_article_hits(ordered_hits, limit=10)
+    result = {
+        "claim": claim,
+        "queries": tuple(variants),
+        "hits": selected_hits,
+        "score_details": score_details,
+    }
+    if context_for is not None:
+        if enrich:
+            enrichment_hits = selected_hits[:1] if top_only else selected_hits
+            contexts = {
+                chunk.chunk_id: context_for(chunk) for chunk, _score in enrichment_hits
+            }
+
+            def enrich_one(hit: ScoredChunk) -> dict:
+                return enrich_hits(
+                    [
+                        {
+                            "claim": claim,
+                            "hits": [hit],
+                            "score_details": score_details,
+                        }
+                    ],
+                    context_for=lambda chunk: contexts[chunk.chunk_id],
+                    select_evidence=select_evidence,
+                    explain=explain,
+                )[0]
+
+            enriched: list[dict | None] = [None] * len(enrichment_hits)
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = {
+                    executor.submit(enrich_one, hit): index
+                    for index, hit in enumerate(enrichment_hits)
+                }
+                completed = 0
+                for future in as_completed(futures):
+                    enriched[futures[future]] = future.result()
+                    completed += 1
+                    if progress is not None:
+                        progress(
+                            f"Enriching finalists · {completed}/{len(enrichment_hits)} complete"
+                        )
+            result["items"] = [item for item in enriched if item is not None]
+        else:
+            contexts = {
+                chunk.chunk_id: context_for(chunk) for chunk, _score in selected_hits
+            }
+            result["items"] = enrich_hits(
+                [result],
+                context_for=lambda chunk: contexts[chunk.chunk_id],
+                top_only=top_only,
+            )
+    return result
+
+
+def _top_article_hits(hits: Sequence[ScoredChunk], *, limit: int) -> list[ScoredChunk]:
+    """Keep the highest-scoring passage from each article, globally ranked."""
+    by_article: dict[str, ScoredChunk] = {}
+    for hit in hits:
+        article_key = hit[0].paper.zotero_key
+        previous = by_article.get(article_key)
+        if previous is None or hit[1] > previous[1]:
+            by_article[article_key] = hit
+    return sorted(by_article.values(), key=lambda hit: hit[1], reverse=True)[:limit]
+
+
+def _run_expander(
+    expand: Expand, text: str, progress: ProgressUpdate | None
+) -> list[str]:
+    """Call newer progress-aware expanders without breaking injected legacy ones."""
+    if progress is None:
+        return expand(text)
+    try:
+        accepts_progress = "progress" in signature(expand).parameters
+    except (TypeError, ValueError):
+        accepts_progress = False
+    if accepts_progress:
+        return expand(text, progress=progress)  # type: ignore[call-arg]
+    return expand(text)
+
+
+def _run_reranker(
+    rerank: Rerank,
+    text: str,
+    hits: Sequence[ScoredChunk],
+    progress: ProgressUpdate | None,
+) -> list[ScoredChunk]:
+    if progress is None:
+        return rerank(text, hits)
+    try:
+        parameters = signature(rerank).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    kwargs = {}
+    accepts_kwargs = any(
+        parameter.kind is parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+    if "progress" in parameters or accepts_kwargs:
+        kwargs["progress"] = progress
+    if kwargs:
+        return rerank(text, hits, **kwargs)  # type: ignore[call-arg]
+    return rerank(text, hits)
 
 
 def retrieve_claims(
@@ -38,7 +189,9 @@ def retrieve_claims(
     search: Search,
     limit: int = 5,
     min_score: float = 0.0,
+    expand: Expand | None = None,
     rerank: Rerank | None = None,
+    progress: ProgressUpdate | None = None,
 ) -> list[dict]:
     return [
         search_claim(
@@ -47,7 +200,9 @@ def retrieve_claims(
             search=search,
             limit=limit,
             min_score=min_score,
+            expand=expand,
             rerank=rerank,
+            progress=progress,
         )
         for claim in claims
     ]
@@ -91,6 +246,16 @@ def enrich_hits(
                     "claim": claim,
                     "chunk": chunk,
                     "score": score,
+                    "vector_score": result.get("score_details", {})
+                    .get(chunk.chunk_id, {})
+                    .get("vector", score),
+                    "lexical_score": result.get("score_details", {})
+                    .get(chunk.chunk_id, {})
+                    .get("lexical", 0.0),
+                    "retrieval_score": result.get("score_details", {})
+                    .get(chunk.chunk_id, {})
+                    .get("retrieval", score),
+                    "rerank_score": score,
                     "evidence": evidence,
                     "rationale": rationale,
                     "context": context,

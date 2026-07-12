@@ -149,6 +149,11 @@ def _add_query_options(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Disable only the LLM evidence-selection stage",
     )
+    parser.add_argument(
+        "--no-enrichment",
+        action="store_true",
+        help="Disable LLM evidence selection and rationale generation",
+    )
     parser.add_argument("--output", type=Path)
 
 
@@ -168,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
                 settings,
                 collection=args.collection,
                 rebuild=args.rebuild or legacy_rebuild,
+                show_progress=not args.quiet,
             )
             _emit(render_sync(result), args.output)
             return 0
@@ -184,6 +190,8 @@ def main(argv: list[str] | None = None) -> int:
                 min_score=args.min_score,
                 no_llm=args.no_llm,
                 disabled_stages=_disabled_llm_stages(args),
+                show_progress=not args.quiet,
+                enrich=not args.no_enrichment,
             )
             _emit(result["markdown"], args.output)
             return 0
@@ -200,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
                     settings,
                     collection=args.legacy_collection,
                     rebuild=legacy_rebuild,
+                    show_progress=not args.quiet,
                 )
                 logger.info("Legacy sync indexed %d documents", len(sync_result["indexed"]))
             elif legacy_rebuild:
@@ -211,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
                 min_score=args.min_score,
                 no_llm=args.no_llm,
                 disabled_stages=_disabled_llm_stages(args),
+                show_progress=not args.quiet,
+                enrich=not args.no_enrichment,
             )
             _emit(result["markdown"], args.output)
             return 0
@@ -253,7 +264,9 @@ def _disabled_llm_stages(args: argparse.Namespace) -> tuple[str, ...]:
         stages.append("rerank")
     if args.no_evidence_extraction:
         stages.append("evidence")
-    return tuple(stages)
+    if args.no_enrichment:
+        stages.extend(("evidence", "rationale"))
+    return tuple(dict.fromkeys(stages))
 
 
 def _emit(markdown: str, output: Path | None) -> None:

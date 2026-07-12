@@ -46,6 +46,21 @@ class Chunk:
 type ScoredChunk = tuple[Chunk, float]
 
 
+class RetrievalScore(float):
+    """Combined retrieval score carrying its semantic and lexical components."""
+
+    semantic: float
+    lexical: float
+
+    def __new__(
+        cls, value: float, *, semantic: float, lexical: float
+    ) -> RetrievalScore:
+        score = super().__new__(cls, value)
+        score.semantic = semantic
+        score.lexical = lexical
+        return score
+
+
 class Claim(TypedDict):
     """A draft claim parsed from a supported source format."""
 

@@ -22,7 +22,7 @@ from uuid import uuid4
 
 import sqlite_vec
 
-from ..domain import Chunk, Paper, ScoredChunk
+from ..domain import Chunk, Paper, RetrievalScore, ScoredChunk
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -466,7 +466,13 @@ class SQLiteStore:
                 continue
             semantic = 1.0 / (1.0 + float(row["distance"]))
             lexical = _lexical_overlap(query_text, chunk.text) if query_text else 0.0
-            scored.append((chunk, 0.75 * semantic + 0.25 * lexical))
+            combined = 0.75 * semantic + 0.25 * lexical
+            scored.append(
+                (
+                    chunk,
+                    RetrievalScore(combined, semantic=semantic, lexical=lexical),
+                )
+            )
         return sorted(scored, key=lambda hit: hit[1], reverse=True)[:limit]
 
     def context_for(self, chunk: Chunk, *, window: int = 1, max_words: int = 600) -> str:

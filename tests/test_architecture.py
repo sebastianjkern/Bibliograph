@@ -1,5 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Lock
+from time import sleep
 
 import pytest
 
@@ -103,9 +105,15 @@ def test_indexing_scopes_chunk_ids_to_each_source_document():
                     embed_documents=lambda _texts: [[1.0, 0.0]],
                     store=store,
                 )
-            hits = store.search([1.0, 0.0], limit=5)
+            hits = store.search(
+                [1.0, 0.0],
+                limit=5,
+                query_text="Shared attachment evidence",
+            )
 
     assert {chunk.chunk_id for chunk, _score in hits} == {"A1:0", "A2:0"}
+    assert all(score.semantic == 1.0 for _chunk, score in hits)
+    assert all(score.lexical == 1.0 for _chunk, score in hits)
 
 
 def test_one_fake_chat_runtime_serves_all_llm_tasks():
@@ -132,6 +140,51 @@ def test_one_fake_chat_runtime_serves_all_llm_tasks():
         complete=complete,
     ) == ("Exact supporting sentence.", "Direct support.")
     assert llm_tasks.explain("claim", chunk.text, complete=complete) == "Direct support."
+
+
+def test_rerank_chunks_all_candidates_into_prompts_of_at_most_ten():
+    paper = Paper("P1", "A paper")
+    hits = [
+        (Chunk(f"P1:{index}:0", paper, f"Evidence {index}."), 0.5)
+        for index in range(11)
+    ]
+    calls = []
+
+    def complete(messages, *, json_mode=False):
+        candidates = messages[1]["content"].split("CANDIDATES:\n", 1)[1]
+        calls.append(candidates.count("["))
+        return '{"items": []}'
+
+    result = llm_tasks.rerank("claim", hits, complete=complete)
+
+    assert calls == [10, 1]
+    assert result == hits
+
+
+def test_rerank_batches_run_concurrently_and_keep_batch_order():
+    paper = Paper("P1", "A paper")
+    hits = [
+        (Chunk(f"P1:{index}:0", paper, f"Evidence {index}."), 0.5)
+        for index in range(11)
+    ]
+    lock = Lock()
+    active = 0
+    maximum_active = 0
+
+    def complete(_messages, *, json_mode=False):
+        nonlocal active, maximum_active
+        with lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        sleep(0.02)
+        with lock:
+            active -= 1
+        return '{"items": []}'
+
+    result = llm_tasks.rerank("claim", hits, complete=complete)
+
+    assert maximum_active > 1
+    assert result == hits
 
 
 def test_search_with_llm_off_never_constructs_a_chat_provider(monkeypatch):
@@ -213,6 +266,41 @@ def test_optional_llm_initialization_failure_uses_configured_fallbacks(monkeypat
     assert tools["explain"]("claim", hit[0].text) == (
         "Retrieved evidence overlaps with the draft passage; verify the source before citing."
     )
+
+
+def test_query_expansion_parses_typed_alternatives():
+    from bibliograph.pipeline.llm_tasks import expand_query
+
+    result = expand_query(
+        "Road quality affects market access.",
+        complete=lambda _messages, json_mode=False: '{"items": ['
+        '{"type": "paraphrase", "text": "Transport infrastructure affects market access"},'
+        '{"type": "not-a-type", "text": "Ignore this"},'
+        '{"type": "causal", "text": "Better roads reduce travel costs and improve access"}'
+        "]}",
+    )
+
+    assert result == [
+        "Transport infrastructure affects market access",
+        "Better roads reduce travel costs and improve access",
+    ]
+
+
+def test_query_expansion_reports_each_partial_prompt():
+    updates = []
+
+    llm_tasks.expand_query(
+        "Road quality affects market access.",
+        complete=lambda _messages, json_mode=False: '{"items": []}',
+        progress=updates.append,
+    )
+
+    assert updates == [
+        "Expanding queries · 1/4 complete",
+        "Expanding queries · 2/4 complete",
+        "Expanding queries · 3/4 complete",
+        "Expanding queries · 4/4 complete",
+    ]
 
 
 def test_required_llm_initialization_failure_propagates(monkeypatch):

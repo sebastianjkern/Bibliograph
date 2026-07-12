@@ -1,6 +1,9 @@
+from threading import Lock
+from time import sleep
+
 from bibliograph.domain import Chunk, Paper
 from bibliograph.pipeline.drafts import parse_draft
-from bibliograph.pipeline.retrieval import enrich_hits, retrieve_claims
+from bibliograph.pipeline.retrieval import enrich_hits, retrieve_claims, search_claim
 from bibliograph.render import render_check, render_search
 
 
@@ -57,12 +60,129 @@ def test_shared_retrieval_pipeline_drives_search_and_check_rendering():
     report = render_check(items)
     assert "# Citation suggestions" in report
     assert "Direct support." in report
-    assert "- **Title:** Road study" in report
-    assert "- **Support score:** `0.80`" in report
-    assert "- **DOI:** 10/example" in report
-    assert "- **Page:** 1" in report
+    assert "| **Title** | Road study |" in report
+    assert "| **Vector similarity** | 0.80 |" in report
+    assert "| **Lexical closeness** | 0.00 |" in report
+    assert "| **Rerank support** | 0.80 |" in report
+    assert "| **DOI** | 10/example |" in report
+    assert "| **Page** | 1 |" in report
     assert "### Excerpt" in report
-    assert "### Why this fits" in report
+    assert "### Explanation" in report
+
+
+def test_retrieval_expands_queries_and_deduplicates_before_reranking():
+    paper = Paper("P1", "Road study", ("Ada",), "2024")
+    first = Chunk("P1:1:0", paper, "Road quality improves market access.")
+    second = Chunk("P1:2:0", paper, "Transport infrastructure lowers trade costs.")
+    searched = []
+
+    def embed(texts):
+        assert texts == [
+            "Road quality affects market access.",
+            "Transport infrastructure and trade",
+        ]
+        return [[1.0, 0.0], [0.0, 1.0]]
+
+    def search(vector, *, limit, query_text):
+        searched.append((vector, query_text))
+        if query_text == "Road quality affects market access.":
+            return [(first, 0.7), (second, 0.2)]
+        return [(first, 0.9), (second, 0.8)]
+
+    reranked = []
+
+    def rerank(claim, hits):
+        reranked.append((claim, hits))
+        return list(reversed(hits))
+
+    result = retrieve_claims(
+        [{"text": "Road quality affects market access.", "citation_keys": ()}],
+        embed_queries=embed,
+        search=search,
+        expand=lambda _claim: ["Transport infrastructure and trade"],
+        rerank=rerank,
+        limit=2,
+    )[0]
+
+    assert [query for _vector, query in searched] == [
+        "Road quality affects market access.",
+        "Transport infrastructure and trade",
+    ]
+    assert reranked[0][0] == "Road quality affects market access."
+    assert [hit[1] for hit in reranked[0][1]] == [0.9, 0.8]
+    assert result["queries"] == (
+        "Road quality affects market access.",
+        "Transport infrastructure and trade",
+    )
+
+
+def test_enrichment_queue_processes_suggestions_in_parallel():
+    hits = [
+        (
+            Chunk(
+                f"P{index}:0",
+                Paper(f"P{index}", f"Road study {index}", ("Ada",), "2024"),
+                f"Evidence sentence {index}.",
+            ),
+            0.8,
+        )
+        for index in range(4)
+    ]
+    active = 0
+    maximum_active = 0
+    lock = Lock()
+
+    def rerank(_claim, candidates, *, progress=None):
+        return list(candidates)
+
+    def select(_claim, hit, _context):
+        nonlocal active, maximum_active
+        with lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        sleep(0.02)
+        with lock:
+            active -= 1
+        return hit[0].text, "Direct support."
+
+    result = search_claim(
+        {"text": "A claim", "citation_keys": ()},
+        embed_queries=lambda _texts: [[1.0]],
+        search=lambda _vector, **_kwargs: hits,
+        rerank=rerank,
+        context_for=lambda chunk: chunk.text,
+        select_evidence=select,
+    )
+
+    assert maximum_active > 1
+    assert len(result["items"]) == 4
+
+
+def test_only_top_ten_distinct_articles_are_enriched_after_reranking():
+    hits = []
+    for index in range(12):
+        paper = Paper(f"P{index}", f"Paper {index}")
+        hits.append((Chunk(f"P{index}:0", paper, f"Evidence {index}."), index / 10))
+    duplicate = Chunk("P11:1", hits[-1][0].paper, "Second passage from paper 11.")
+    hits.append((duplicate, 0.95))
+    enriched = []
+
+    result = search_claim(
+        {"text": "A claim", "citation_keys": ()},
+        embed_queries=lambda _texts: [[1.0]],
+        search=lambda _vector, **_kwargs: hits,
+        context_for=lambda chunk: chunk.text,
+        select_evidence=lambda _claim, hit, _context: (
+            enriched.append(hit[0].paper.zotero_key) or hit[0].text,
+            "Direct support.",
+        ),
+    )
+
+    assert len(result["hits"]) == 10
+    assert len({hit[0].paper.zotero_key for hit in result["hits"]}) == 10
+    assert len(enriched) == 10
+    assert "P0" not in enriched
+    assert "P1" not in enriched
 
 
 def test_rendered_references_are_sorted_by_support_score():
@@ -101,7 +221,12 @@ def test_evidence_enrichment_prefers_sentence_excerpts_over_metadata_like_quotes
         "thus fostering regional integration.",
         page=7,
     )
-    claims = [{"text": "Transport infrastructure fosters regional integration.", "citation_keys": ()}]
+    claims = [
+        {
+            "text": "Transport infrastructure fosters regional integration.",
+            "citation_keys": (),
+        }
+    ]
 
     def embed(texts):
         return [[1.0, 0.0]]
@@ -130,7 +255,9 @@ def test_explain_strips_label_prefixes_from_llm_output():
     content = explain(
         "A claim",
         "Some evidence",
-        complete=lambda _messages, json_mode=False: "SUPPORT. The evidence directly addresses the claim.",
+        complete=lambda _messages, json_mode=False: (
+            "SUPPORT. The evidence directly addresses the claim."
+        ),
     )
 
     assert content == "The evidence directly addresses the claim."

@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from bibliograph.cli import _settings_overrides, build_parser, main
+from bibliograph.cli import _disabled_llm_stages, _settings_overrides, build_parser, main
+from bibliograph.commands.search import _stage_progress
 
 
 def test_cli_exposes_the_four_primary_commands():
@@ -10,6 +11,14 @@ def test_cli_exposes_the_four_primary_commands():
     assert parser.parse_args(["search", "Road quality affects trade"]).command == "search"
     assert parser.parse_args(["check", "draft.tex"]).command == "check"
     assert parser.parse_args(["status"]).command == "status"
+
+
+def test_search_progress_tracks_async_batch_completion_fractionally():
+    assert _stage_progress("Expanding queries · 2/4 complete") == 0.5
+    assert _stage_progress("Embedding expanded queries") == 2.0
+    assert _stage_progress("Retrieving evidence · 3/5 queries") == 2.4
+    assert _stage_progress("Reranking candidates · 2/4 batches complete") == 3.5
+    assert _stage_progress("Enriching finalists · 3/4 complete") == 4.75
 
 
 def test_cli_keeps_read_workflow_shims_for_one_release():
@@ -23,6 +32,9 @@ def test_cli_keeps_read_workflow_shims_for_one_release():
     )
     assert legacy_search.no_rerank is True
     assert legacy_search.no_evidence_extraction is True
+    no_enrichment = parser.parse_args(["search", "claim", "--no-enrichment"])
+    assert no_enrichment.no_enrichment is True
+    assert _disabled_llm_stages(no_enrichment) == ("evidence", "rationale")
     assert (
         parser.parse_args(["suggest", "draft.tex", "--no-evidence-extraction"])
         .no_evidence_extraction
@@ -85,6 +97,8 @@ def test_main_dispatches_search_without_constructing_sync_dependencies(monkeypat
             "min_score": 0.0,
             "no_llm": True,
             "disabled_stages": ("rerank", "evidence"),
+            "show_progress": False,
+            "enrich": True,
         },
     }
 
@@ -104,7 +118,7 @@ def test_legacy_check_explicitly_syncs_before_read_only_check(monkeypatch):
 
     assert main(["--quiet", "check", "draft.tex", "Methods", "--rebuild-db"]) == 0
     assert calls == [
-        ("sync", {"collection": "Methods", "rebuild": True}),
+        ("sync", {"collection": "Methods", "rebuild": True, "show_progress": False}),
         (
             "check",
             {
@@ -113,6 +127,8 @@ def test_legacy_check_explicitly_syncs_before_read_only_check(monkeypatch):
                 "min_score": 0.0,
                 "no_llm": False,
                 "disabled_stages": (),
+                "show_progress": False,
+                "enrich": True,
             },
         ),
     ]
@@ -136,7 +152,12 @@ def test_sync_accepts_legacy_rebuild_flag_after_the_subcommand(monkeypatch):
     )
 
     assert main(["--quiet", "sync", "Methods", "--rebuild-db"]) == 0
-    assert calls == [({"loaded": True}, {"collection": "Methods", "rebuild": True})]
+    assert calls == [
+        (
+            {"loaded": True},
+            {"collection": "Methods", "rebuild": True, "show_progress": False},
+        )
+    ]
 
 
 def test_read_commands_reject_legacy_database_rebuild_flag(monkeypatch):

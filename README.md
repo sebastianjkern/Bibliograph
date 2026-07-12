@@ -2,7 +2,7 @@
 
 # Bibliograph
 
-Bibliograph finds grounded citation evidence in a local Zotero-backed paper library. It synchronizes PDFs into a SQLite/sqlite-vec index, searches claims semantically, and can use an LLM for reranking, quote selection, and short rationales.
+Bibliograph finds grounded citation evidence in a local Zotero-backed paper library. It synchronizes PDFs into a SQLite/sqlite-vec index, expands claims into alternate retrieval hypotheses, searches them semantically, deduplicates passages, and can use an LLM for query-aware reranking, quote selection, and short rationales.
 
 The project is organized around one configured pipeline selected at startup: provider adapters are independent from retrieval, indexing, persistence, and CLI parsing. A provider never reads command-line arguments or environment variables itself.
 
@@ -62,7 +62,7 @@ batch_size = 32
 provider = "ollama"
 model = "rnj-1"
 mode = "optional" # off, optional, or required
-stages = ["rerank", "evidence", "rationale"]
+stages = ["expand", "rerank", "evidence", "rationale"]
 
 [profiles.default.acquisition]
 order = ["cache", "zotero-storage", "zotero-api", "remote"]
@@ -121,7 +121,7 @@ uv run bibliograph status
 uv run bibliograph status --probe
 ```
 
-`status --probe` also checks Zotero access. `search` and `check` accept `--limit`, `--min-score`, `--no-llm`, `--no-rerank`, `--no-evidence-extraction`, and `--output`. Use `--no-llm` to keep all retrieval decisions deterministic. `sync` reports embedding batches as they are stored, and validates the exact embedding model before a rebuild starts. If an embedding provider cannot be reached, the live database remains untouched. Optional LLM failures are logged and fall back deterministically; `llm.mode = "required"` makes them command errors instead.
+`status --probe` also checks Zotero access. `search` and `check` accept `--limit`, `--min-score`, `--no-llm`, `--no-rerank`, `--no-evidence-extraction`, `--no-enrichment`, and `--output`. Use `--no-llm` to keep all retrieval decisions deterministic; query expansion then falls back to the original claim. `--no-enrichment` disables LLM evidence selection and rationale generation while retaining deterministic excerpts. With the `expand` stage enabled, the LLM generates bounded paraphrase, support, contradiction, causal, terminology, and related hypotheses; each is embedded and searched, duplicate chunks are merged by their strongest retrieval score, and the original claim is used for final reranking. After reranking completes, only the strongest passage from each of the top 10 distinct articles enters the parallel enrichment stage. `sync` reports embedding batches as they are stored, and validates the exact embedding model before a rebuild starts. If an embedding provider cannot be reached, the live database remains untouched. Optional LLM failures are logged and fall back deterministically; `llm.mode = "required"` makes them command errors instead.
 
 Each database has one active text embedding fingerprint. A changed provider, model, or preprocessing setup produces rebuild guidance rather than silently clearing vectors. Schema-v1 indexes are derived data and should be replaced with `sync --rebuild`.
 

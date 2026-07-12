@@ -16,7 +16,7 @@ provider = "ollama"
 model = "rnj-1"
 base_url = "http://localhost:11434"
 mode = "optional"
-stages = ["rerank", "evidence", "rationale"]
+stages = ["expand", "rerank", "evidence", "rationale"]
 
 [profiles.default.acquisition]
 order = ["cache", "zotero-storage", "zotero-api", "remote"]
