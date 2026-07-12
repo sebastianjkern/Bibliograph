@@ -3,8 +3,30 @@ from collections.abc import Iterable
 
 from .drafts import DraftClaim
 from .embeddings import Embedder
+from .logging_utils import get_logger
 from .models import DraftMatch
 from .store import SQLiteIndex
+
+logger = get_logger("retrieval")
+
+
+def _log_retrieval(claim: str, sources: tuple, min_score: float) -> None:
+    logger.debug(
+        "Vector search claim=%r min_score=%.3f candidates=%d",
+        claim,
+        min_score,
+        len(sources),
+    )
+    for rank, source in enumerate(sources, start=1):
+        logger.debug(
+            "Vector candidate rank=%d score=%.6f chunk_id=%s source=%r page=%s text=%r",
+            rank,
+            source.score,
+            source.chunk.chunk_id,
+            source.chunk.paper.citation_label,
+            source.chunk.page or "unknown",
+            source.chunk.text,
+        )
 
 
 def split_draft(text: str, min_words: int = 4) -> list[str]:
@@ -27,6 +49,7 @@ def find_citations(
         sources = tuple(
             source for source in index.search(embedding, limit) if source.score >= min_score
         )
+        _log_retrieval(passage, sources, min_score)
         matches.append(DraftMatch(passage, sources))
     return matches
 
@@ -48,6 +71,7 @@ def find_claim_sources(
         for source in index.search(embedding, limit, query_text=claim)
         if source.score >= min_score
     )
+    _log_retrieval(claim, sources, min_score)
     return [DraftMatch(claim, sources)]
 
 
@@ -61,7 +85,7 @@ def find_claim_citations(
     """Retrieve hybrid semantic/lexical evidence for parsed draft claims."""
     claims = list(claims)
     embeddings = embedder.embed([claim.text for claim in claims])
-    return [
+    matches = [
         DraftMatch(
             claim.text,
             tuple(
@@ -79,6 +103,9 @@ def find_claim_citations(
         )
         for claim, embedding in zip(claims, embeddings, strict=True)
     ]
+    for match in matches:
+        _log_retrieval(match.draft_text, match.sources, min_score)
+    return matches
 
 
 def flatten_sources(matches: Iterable[DraftMatch]) -> list[tuple[str, str, float]]:

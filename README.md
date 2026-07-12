@@ -114,6 +114,21 @@ uv run bibliograph find-sources "Road infrastructure improves regional market ac
 
 `find` is also accepted as a shorter command name.
 
+### Debug retrieval and LLM decisions
+
+Enable debug logging before the subcommand to inspect the complete pipeline from vector search
+through reranking and evidence extraction:
+
+```bash
+uv run bibliograph --log-level DEBUG find-sources \
+  "Road infrastructure improves regional market access" \
+  --limit 5
+```
+
+The trace includes retrieved chunks and scores, the reranker prompt and raw response, the parsed
+ranking, the evidence-extraction context and response, and exact-quote validation. Because debug
+logs contain draft and paper text, treat captured logs as potentially sensitive.
+
 ## Useful commands
 
 Index a local PDF manually:

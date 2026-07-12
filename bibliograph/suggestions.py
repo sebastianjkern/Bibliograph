@@ -104,36 +104,52 @@ class OpenAIEvidenceExtractor:
     def extract(
         self, draft_text: str, source: CitationSource, context: str
     ) -> EvidenceSelection:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Select exact evidence for a draft claim. Return JSON only with "
+                    "supports_claim (boolean), quote (exact text copied from CONTEXT), "
+                    "and rationale (short explanation). Never invent or paraphrase a quote."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"CLAIM:\n{draft_text}\n\nSOURCE:\n"
+                    f"{source.chunk.paper.citation_label}, "
+                    f"page {source.chunk.page or 'unknown'}\n\n"
+                    f"CONTEXT:\n{context}"
+                ),
+            },
+        ]
+        logger.debug(
+            "Evidence request model=%s chunk_id=%s messages=%r",
+            self.model,
+            source.chunk.chunk_id,
+            messages,
+        )
         response = self.client.chat.completions.create(
             model=self.model,
             temperature=0,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Select exact evidence for a draft claim. Return JSON only with "
-                        "supports_claim (boolean), quote (exact text copied from CONTEXT), "
-                        "and rationale (short explanation). Never invent or paraphrase a quote."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"CLAIM:\n{draft_text}\n\nSOURCE:\n"
-                        f"{source.chunk.paper.citation_label}, "
-                        f"page {source.chunk.page or 'unknown'}\n\n"
-                        f"CONTEXT:\n{context}"
-                    ),
-                },
-            ],
+            messages=messages,
         )
         content = response.choices[0].message.content or "{}"
+        logger.debug("Evidence raw response chunk_id=%s content=%r", source.chunk.chunk_id, content)
         payload = _parse_evidence_payload(content)
-        return EvidenceSelection(
+        selection = EvidenceSelection(
             bool(payload.get("supports_claim", False)),
             str(payload.get("quote", "")).strip(),
             str(payload.get("rationale", "")).strip(),
         )
+        logger.debug(
+            "Evidence parsed selection chunk_id=%s supports_claim=%s quote=%r rationale=%r",
+            source.chunk.chunk_id,
+            selection.supports_claim,
+            selection.quote,
+            selection.rationale,
+        )
+        return selection
 
 
 def format_citation(source: CitationSource) -> str:
@@ -173,7 +189,14 @@ def suggest_citations(
                     source.chunk.paper.title,
                 )
                 selection = evidence_extractor.extract(match.draft_text, source, context)
-                if selection.supports_claim and selection.quote and selection.quote in context:
+                quote_is_verbatim = bool(selection.quote) and selection.quote in context
+                logger.debug(
+                    "Evidence validation chunk_id=%s supports_claim=%s quote_is_verbatim=%s",
+                    source.chunk.chunk_id,
+                    selection.supports_claim,
+                    quote_is_verbatim,
+                )
+                if selection.supports_claim and quote_is_verbatim:
                     evidence = selection.quote
                     selected_rationale = selection.rationale
                     logger.info(

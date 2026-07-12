@@ -4,7 +4,10 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from .config import DEFAULT_OPENAI_API_KEY, DEFAULT_OPENAI_BASE_URL
+from .logging_utils import get_logger
 from .models import CitationSource, DraftMatch
+
+logger = get_logger("reranker")
 
 
 class Reranker(Protocol):
@@ -46,23 +49,26 @@ class OpenAIReranker:
             f"page {source.chunk.page or 'unknown'}"
             for index, source in enumerate(sources)
         )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Rerank evidence for a draft claim. Return JSON only with an "
+                    "'items' array. "
+                    "Each item must contain candidate (integer index) and support (0 to 1). "
+                    "Only judge whether the supplied passage supports the claim."
+                ),
+            },
+            {"role": "user", "content": f"CLAIM:\n{draft_text}\n\nCANDIDATES:\n{candidates}"},
+        ]
+        logger.debug("Rerank request model=%s messages=%r", self.model, messages)
         response = self.client.chat.completions.create(
             model=self.model,
             temperature=0,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Rerank evidence for a draft claim. Return JSON only with an "
-                        "'items' array. "
-                        "Each item must contain candidate (integer index) and support (0 to 1). "
-                        "Only judge whether the supplied passage supports the claim."
-                    ),
-                },
-                {"role": "user", "content": f"CLAIM:\n{draft_text}\n\nCANDIDATES:\n{candidates}"},
-            ],
+            messages=messages,
         )
         content = response.choices[0].message.content or "{}"
+        logger.debug("Rerank raw response=%r", content)
         payload = _parse_json_payload(content)
         items = payload.get("items", [])
         ranking = []
@@ -83,6 +89,7 @@ class OpenAIReranker:
             for index, source in enumerate(sources)
             if index not in seen
         )
+        logger.debug("Rerank parsed ranking=%r", ranking)
         return ranking
 
 
@@ -114,6 +121,14 @@ def _parse_json_payload(content: str | list[dict]) -> dict:
 def rerank_matches(matches: Sequence[DraftMatch], reranker: Reranker) -> list[DraftMatch]:
     reranked: list[DraftMatch] = []
     for match in matches:
+        logger.debug(
+            "Rerank input claim=%r retrieval_order=%r",
+            match.draft_text,
+            [
+                (index, source.score, source.chunk.chunk_id)
+                for index, source in enumerate(match.sources)
+            ],
+        )
         ranking = reranker.rerank(match.draft_text, match.sources)
         sources = tuple(
             CitationSource(match.sources[index].chunk, score)
@@ -127,5 +142,10 @@ def rerank_matches(matches: Sequence[DraftMatch], reranker: Reranker) -> list[Dr
                 match.citation_keys,
                 match.source_format,
             )
+        )
+        logger.debug(
+            "Rerank output claim=%r order=%r",
+            match.draft_text,
+            [(source.score, source.chunk.chunk_id) for source in sources],
         )
     return reranked

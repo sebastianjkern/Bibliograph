@@ -62,7 +62,14 @@ def sources_to_markdown(
                 try:
                     context = context_provider(source.chunk)
                     selection = evidence_extractor.extract(match.draft_text, source, context)
-                    if selection.supports_claim and selection.quote in context:
+                    quote_is_verbatim = bool(selection.quote) and selection.quote in context
+                    logger.debug(
+                        "Evidence validation chunk_id=%s supports_claim=%s quote_is_verbatim=%s",
+                        source.chunk.chunk_id,
+                        selection.supports_claim,
+                        quote_is_verbatim,
+                    )
+                    if selection.supports_claim and quote_is_verbatim:
                         evidence = selection.quote
                 except Exception as error:
                     logger.warning(
