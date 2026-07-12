@@ -142,6 +142,118 @@ def test_one_fake_chat_runtime_serves_all_llm_tasks():
     assert llm_tasks.explain("claim", chunk.text, complete=complete) == "Direct support."
 
 
+def test_rerank_scores_direct_entailment_above_topical_objective():
+    paper = Paper("P1", "A paper", ("Author",), "2010")
+    objective = Chunk(
+        "P1:1:0",
+        paper,
+        "Our objective is to develop a gravity model for inter-city trade.",
+        page=7,
+        section="Introduction",
+    )
+    result = Chunk(
+        "P1:2:0",
+        paper,
+        "We find that road improvements increased overland trade by 18 percent.",
+        page=14,
+        section="Results",
+    )
+    prompts = []
+
+    def complete(messages, *, json_mode=False):
+        prompts.append(messages[0]["content"])
+        return (
+            '{"items":['
+            '{"candidate":0,"support":0.82,"relation":"neutral",'
+            '"evidence_role":"objective","claim_specificity":0.7,'
+            '"result_presence":0.0,"primary_source":1.0,"background_penalty":0.8,'
+            '"secondary_citation_penalty":0.0,"unsupported_inference_penalty":0.8},'
+            '{"candidate":1,"support":0.88,"relation":"supports",'
+            '"evidence_role":"result","claim_specificity":0.95,'
+            '"result_presence":1.0,"primary_source":1.0,"background_penalty":0.0,'
+            '"secondary_citation_penalty":0.0,"unsupported_inference_penalty":0.0}'
+            ']}'
+        )
+
+    ranked = llm_tasks.rerank(
+        "Road network improvements increased overland trade in Sub-Saharan Africa.",
+        [(objective, 0.9), (result, 0.7)],
+        complete=complete,
+    )
+
+    assert [chunk.chunk_id for chunk, _score in ranked] == ["P1:2:0", "P1:1:0"]
+    assert ranked[0][1] > 0.7
+    assert ranked[1][1] <= 0.35
+    assert "direct factual entailment" in prompts[0]
+    assert "directly_entails_claim" in prompts[0]
+    assert "Our objective is to develop a gravity model" in prompts[0]
+
+
+def test_rerank_caps_publisher_metadata_even_when_llm_overrates_it():
+    paper = Paper("P1", "A paper", ("Author",), "2010")
+    metadata = Chunk(
+        "P1:1:0",
+        paper,
+        "Published by Blackwell Publishing Ltd, 9600 Garsington Road, Oxford OX4 2DQ, UK.",
+        page=2,
+    )
+
+    def complete(_messages, *, json_mode=False):
+        return (
+            '{"items":[{"candidate":0,"support":0.9,"relation":"supports",'
+            '"evidence_role":"other","claim_specificity":0.9,'
+            '"result_presence":0.8,"primary_source":1.0,'
+            '"unsupported_inference_penalty":0.0}]}'
+        )
+
+    ranked = llm_tasks.rerank("Roads increase trade.", [(metadata, 0.8)], complete=complete)
+
+    assert ranked == [(metadata, 0.05)]
+
+
+def test_rerank_calculates_boolean_subscores_without_llm_numeric_score():
+    paper = Paper("P1", "A paper", ("Author",), "2010")
+    chunk = Chunk("P1:1:0", paper, "We find that road quality increases trade.")
+    seen_prompt = []
+
+    def complete(messages, *, json_mode=False):
+        seen_prompt.append(messages[0]["content"])
+        return (
+            '{"items":[{"candidate":0,"relation":"supports",'
+            '"evidence_role":"result","directly_entails_claim":true,'
+            '"contains_claim_specific_result":true,"contains_explicit_finding":true,'
+            '"requires_unsupported_inference":false,"source_type":"primary"}]}'
+        )
+
+    ranked = llm_tasks.rerank("Road quality increases trade.", [(chunk, 0.2)], complete=complete)
+
+    assert ranked == [(chunk, 1.0)]
+    assert "JSON booleans" in seen_prompt[0]
+    assert '"support"' not in seen_prompt[0]
+
+
+def test_select_evidence_rejects_publisher_address_quotes():
+    paper = Paper("P1", "A paper", ("Author",), "2010")
+    chunk = Chunk("P1:1:0", paper, "Publisher information.")
+
+    def complete(_messages, *, json_mode=False):
+        return (
+            '{"supports_claim":true,"quote":"Published by Blackwell Publishing Ltd, '
+            '9600 Garsington Road, Oxford OX4 2DQ, UK.",'
+            '"rationale":"Direct support."}'
+        )
+
+    assert (
+        llm_tasks.select_evidence(
+            "Road infrastructure affects trade.",
+            (chunk, 0.05),
+            "Published by Blackwell Publishing Ltd, 9600 Garsington Road, Oxford OX4 2DQ, UK.",
+            complete=complete,
+        )
+        is None
+    )
+
+
 def test_rerank_chunks_all_candidates_into_prompts_of_at_most_ten():
     paper = Paper("P1", "A paper")
     hits = [

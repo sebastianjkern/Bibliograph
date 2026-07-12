@@ -124,6 +124,43 @@ def test_openai_compatible_factories_accept_an_injected_sdk_shaped_client():
     }
 
 
+def test_openai_chat_sends_strict_response_schema_when_requested():
+    captured = {}
+
+    class Completions:
+        def create(self, **payload):
+            captured["chat"] = payload
+            return {"choices": [{"message": {"content": "{}"}}]}
+
+    class Client:
+        class chat:
+            completions = Completions()
+
+    chat = build_chat(
+        {
+            "provider": "openai-compatible",
+            "model": "chat-model",
+            "client": Client(),
+        }
+    )
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+
+    chat["complete"](
+        [{"role": "user", "content": "Return structured data."}],
+        json_mode=True,
+        response_schema=schema,
+    )
+
+    assert captured["chat"]["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "bibliograph_structured_response",
+            "strict": True,
+            "schema": schema,
+        },
+    }
+
+
 def test_ollama_factories_use_native_paths_and_contextual_errors():
     calls = []
 
@@ -173,6 +210,37 @@ def test_ollama_factories_use_native_paths_and_contextual_errors():
         failing["probe"]()
     assert "http://ollama.test" in str(error.value)
     assert "connection refused" in str(error.value)
+
+
+def test_ollama_chat_sends_schema_format_when_requested():
+    calls = []
+
+    def transport(path, payload):
+        calls.append((path, payload))
+        return {"message": {"content": "{}"}}
+
+    chat = build_chat(
+        {"provider": "ollama", "model": "chat-model", "transport": transport}
+    )
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+
+    chat["complete"](
+        [{"role": "user", "content": "Return structured data."}],
+        json_mode=True,
+        response_schema=schema,
+    )
+
+    assert calls == [
+        (
+            "/api/chat",
+            {
+                "model": "chat-model",
+                "messages": [{"role": "user", "content": "Return structured data."}],
+                "stream": False,
+                "format": schema,
+            },
+        )
+    ]
 
 
 def test_ollama_probes_use_the_configured_embedding_and_chat_models():

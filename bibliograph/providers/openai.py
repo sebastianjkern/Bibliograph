@@ -100,12 +100,26 @@ def openai_chat(config: Mapping[str, Any]) -> ChatRuntime:
     client = _client(config, model=model, base_url=base_url, operation="LLM")
     transport = option(config, "transport")
 
-    def complete(messages: Sequence[Mapping[str, object]], *, json_mode: bool = False) -> str:
+    def complete(
+        messages: Sequence[Mapping[str, object]],
+        *,
+        json_mode: bool = False,
+        response_schema: Mapping[str, object] | None = None,
+    ) -> str:
         payload: dict[str, object] = {
             "model": model,
             "messages": [dict(message) for message in messages],
         }
-        if json_mode:
+        if response_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "bibliograph_structured_response",
+                    "strict": True,
+                    "schema": dict(response_schema),
+                },
+            }
+        elif json_mode:
             payload["response_format"] = {"type": "json_object"}
         try:
             response = (

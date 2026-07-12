@@ -269,6 +269,8 @@ def _validated_excerpt(excerpt: str, context: str, *, fallback: str) -> str:
     normalized_context = " ".join(context.split())
     if not normalized_excerpt:
         return fallback
+    if _looks_like_metadata(normalized_excerpt):
+        return fallback if not _looks_like_metadata(fallback) else ""
     if normalized_excerpt.casefold().startswith("section:"):
         return fallback
     if normalized_excerpt not in normalized_context:
@@ -283,8 +285,13 @@ def _best_excerpt(claim: str, context: str) -> str:
     if not normalized_context:
         return ""
     candidates = _excerpt_candidates(normalized_context)
+    candidates = [candidate for candidate in candidates if not _looks_like_metadata(candidate)]
     if not candidates:
-        return _truncate_excerpt(normalized_context)
+        return (
+            ""
+            if _looks_like_metadata(normalized_context)
+            else _truncate_excerpt(normalized_context)
+        )
     scored = [
         (candidate, _excerpt_score(claim, candidate))
         for candidate in candidates
@@ -379,3 +386,22 @@ def _looks_like_heading(text: str) -> bool:
     if len(words) <= 6 and normalized == normalized.title() and not re.search(r"[.!?]", normalized):
         return True
     return False
+
+
+def _looks_like_metadata(text: str) -> bool:
+    """Reject administrative PDF text as citation evidence."""
+
+    normalized = " ".join(text.casefold().split())
+    if not normalized or len(normalized.split()) > 60:
+        return False
+    markers = (
+        "published by ",
+        "copyright ",
+        "all rights reserved",
+        "street, ",
+        " avenue, ",
+        " boulevard, ",
+        " oxford ox",
+        " malden, ma ",
+    )
+    return any(marker in f" {normalized}" for marker in markers)

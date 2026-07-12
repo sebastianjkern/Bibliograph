@@ -109,13 +109,20 @@ def ollama_chat(config: Mapping[str, Any]) -> ChatRuntime:
     identity = f"ollama:{base_url}:{model}"
     transport = option(config, "transport", option(config, "post"))
 
-    def complete(messages: Sequence[Mapping[str, object]], *, json_mode: bool = False) -> str:
+    def complete(
+        messages: Sequence[Mapping[str, object]],
+        *,
+        json_mode: bool = False,
+        response_schema: Mapping[str, object] | None = None,
+    ) -> str:
         payload: dict[str, object] = {
             "model": model,
             "messages": [dict(message) for message in messages],
             "stream": False,
         }
-        if json_mode:
+        if response_schema is not None:
+            payload["format"] = dict(response_schema)
+        elif json_mode:
             payload["format"] = "json"
         try:
             response = _call(

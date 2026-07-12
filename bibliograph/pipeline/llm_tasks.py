@@ -3,7 +3,8 @@
 import asyncio
 import json
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from inspect import signature
 
 from ..domain import ScoredChunk, citation_label
 
@@ -33,6 +34,64 @@ _EXPANSION_PROMPTS = (
     ("reasoning", ("assumption", "alternative")),
     ("terminology", ("domain", "expert", "statistical")),
 )
+
+_RERANK_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["items"],
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "candidate",
+                    "relation",
+                    "evidence_role",
+                    "directly_entails_claim",
+                    "contains_claim_specific_result",
+                    "contains_explicit_finding",
+                    "requires_unsupported_inference",
+                    "source_type",
+                ],
+                "properties": {
+                    "candidate": {"type": "integer", "minimum": 0},
+                    "relation": {"type": "string", "enum": ["supports", "contradicts", "neutral"]},
+                    "evidence_role": {
+                        "type": "string",
+                        "enum": [
+                            "result",
+                            "conclusion",
+                            "method",
+                            "objective",
+                            "definition",
+                            "background",
+                            "secondary",
+                            "other",
+                        ],
+                    },
+                    "directly_entails_claim": {"type": "boolean"},
+                    "contains_claim_specific_result": {"type": "boolean"},
+                    "contains_explicit_finding": {"type": "boolean"},
+                    "requires_unsupported_inference": {"type": "boolean"},
+                    "source_type": {"type": "string", "enum": ["primary", "secondary", "unknown"]},
+                },
+            },
+        }
+    },
+}
+
+_EVIDENCE_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["supports_claim", "quote", "rationale"],
+    "properties": {
+        "supports_claim": {"type": "boolean"},
+        "quote": {"type": "string"},
+        "rationale": {"type": "string"},
+    },
+}
 
 
 def heuristic_expand(claim: str, *, progress: ProgressUpdate | None = None) -> list[str]:
@@ -179,22 +238,51 @@ def _rerank_batch(
 ) -> list[ScoredChunk]:
     candidates = "\n\n".join(
         f"[{index}] {chunk.text}\nSOURCE: {citation_label(chunk.paper)}, "
-        f"page {chunk.page or 'unknown'}"
+        f"page {chunk.page or 'unknown'}, section {chunk.section or 'unknown'}, "
+        f"content kind {chunk.content_kind}"
         for index, (chunk, _score) in enumerate(hits)
     )
-    content = complete(
-        [
-            {
-                "role": "system",
-                "content": (
-                    "Rerank evidence for a draft claim. Return JSON only with an 'items' array. "
-                    "Each item must contain candidate (integer index) and support (0 to 1)."
-                ),
-            },
-            {"role": "user", "content": f"CLAIM:\n{claim}\n\nCANDIDATES:\n{candidates}"},
-        ],
-        json_mode=True,
-    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                    "Rerank evidence for a draft claim. Return one structured object with an "
+                    "'items' array. "
+                    "Evaluate each candidate against the claim itself, not merely topical overlap. "
+                    "Each item must contain candidate (integer index), relation, evidence_role, "
+                    "directly_entails_claim, contains_claim_specific_result, "
+                    "contains_explicit_finding, requires_unsupported_inference, and source_type. "
+                    "The four evidence fields must be JSON booleans, not numeric scores. "
+                    "The source_type must be exactly primary, secondary, or unknown. "
+                    "Do not calculate or return a final ranking score; the application "
+                    "calculates it. "
+                    "The relation must be exactly one of supports, contradicts, or neutral. "
+                    "The evidence_role must be exactly one of result, conclusion, method, "
+                    "objective, definition, background, secondary, or other. "
+                    "Support means direct factual entailment: the passage must state or clearly "
+                    "report the relationship in the claim. A passage that only shares terminology, "
+                    "states the paper's objective, describes a method, or discusses previous "
+                    "studies "
+                    "is neutral, "
+                    "not supporting. Do not infer importance, causality, or results that are "
+                    "absent. "
+                    "Set contains_explicit_finding to false when a passage has no actual finding, "
+                    "estimate, comparison, treatment/outcome relation, or explicit conclusion. "
+                    "Penalize "
+                    "introductions, literature reviews, and second-hand claims, but do not reject "
+                    "them from retrieval. For the example claim 'Road network improvements "
+                    "increased "
+                    "overland trade in "
+                    "Sub-Saharan Africa' and passage 'Our objective is to develop a gravity model "
+                    "for "
+                    "inter-city trade', return relation neutral, directly_entails_claim false, "
+                    "and low evidence quality. "
+                    "Return every candidate exactly once."
+            ),
+        },
+        {"role": "user", "content": f"CLAIM:\n{claim}\n\nCANDIDATES:\n{candidates}"},
+    ]
+    content = _complete_json(complete, messages, _RERANK_SCHEMA)
     payload = _json_object(content)
     ordered: list[ScoredChunk] = []
     seen: set[int] = set()
@@ -202,15 +290,116 @@ def _rerank_batch(
         if not isinstance(item, dict):
             continue
         index = item.get("candidate")
+        if not isinstance(index, int) or not 0 <= index < len(hits) or index in seen:
+            continue
         try:
-            score = float(item.get("support", 0.0))
+            score = _rerank_support(item, hits[index][0].text)
         except (TypeError, ValueError):
             continue
-        if isinstance(index, int) and 0 <= index < len(hits) and index not in seen:
-            ordered.append((hits[index][0], max(0.0, min(1.0, score))))
-            seen.add(index)
+        ordered.append((hits[index][0], max(0.0, min(1.0, score))))
+        seen.add(index)
     ordered.extend(hit for index, hit in enumerate(hits) if index not in seen)
-    return ordered
+    return sorted(ordered, key=lambda hit: hit[1], reverse=True)
+
+
+def _rerank_support(item: dict, text: str = "") -> float:
+    """Calculate a deterministic score from the model's evidence subscores.
+
+    New responses use boolean evidence judgments. Older providers may return
+    the previous numeric schema; that format remains supported during rollout.
+    """
+
+    if "directly_entails_claim" in item:
+        return _boolean_rerank_support(item, text)
+
+    return _legacy_rerank_support(item, text)
+
+
+def _boolean_rerank_support(item: dict, text: str) -> float:
+    score = (
+        0.45 * _boolean_value(item.get("directly_entails_claim"))
+        + 0.20 * _boolean_value(item.get("contains_claim_specific_result"))
+        + 0.20 * _boolean_value(item.get("contains_explicit_finding"))
+        + 0.15 * (str(item.get("source_type", "unknown")).casefold() == "primary")
+    )
+    if _boolean_value(item.get("requires_unsupported_inference")):
+        score -= 0.35
+    return _apply_rerank_caps(item, text, score)
+
+
+def _legacy_rerank_support(item: dict, text: str) -> float:
+    support = _score_value(item.get("support"))
+    metadata = _is_metadata_text(text)
+    quality_fields = (
+        "claim_specificity",
+        "result_presence",
+        "primary_source",
+        "background_penalty",
+        "secondary_citation_penalty",
+        "unsupported_inference_penalty",
+    )
+    if not any(field in item for field in quality_fields) and "relation" not in item:
+        return min(support, 0.05) if metadata else support
+
+    score = (
+        0.40 * support
+        + 0.20 * _score_value(item.get("claim_specificity"))
+        + 0.20 * _score_value(item.get("result_presence"))
+        + 0.15 * _score_value(item.get("primary_source"))
+        - 0.25 * _score_value(item.get("unsupported_inference_penalty"))
+    )
+    return _apply_rerank_caps(item, text, score)
+
+
+def _apply_rerank_caps(item: dict, text: str, score: float) -> float:
+    relation = str(item.get("relation", "")).casefold().strip()
+    role = str(item.get("evidence_role", "")).casefold().strip()
+    metadata = _is_metadata_text(text)
+    if relation == "neutral":
+        score = min(score, 0.30)
+    elif relation == "contradicts":
+        score = min(score, 0.15)
+    if role in {"objective", "method", "background", "definition"}:
+        score = min(score, 0.35)
+    elif role == "secondary":
+        score = min(score, 0.45)
+    if metadata:
+        score = min(score, 0.05)
+    return max(0.0, min(1.0, score))
+
+
+def _boolean_value(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.casefold().strip() in {"true", "yes", "1"}
+    return bool(value) if isinstance(value, (int, float)) else False
+
+
+def _score_value(value: object) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_metadata_text(text: str) -> bool:
+    """Recognize administrative PDF text that cannot support a research claim."""
+
+    normalized = " ".join(text.casefold().split())
+    if not normalized or len(normalized.split()) > 60:
+        return False
+    markers = (
+        "published by ",
+        "copyright ",
+        "all rights reserved",
+        "street, ",
+        " avenue, ",
+        " boulevard, ",
+        " oxford ox",
+        " malden, ma ",
+    )
+    return any(marker in f" {normalized}" for marker in markers)
 
 
 def select_evidence(
@@ -221,12 +410,11 @@ def select_evidence(
     complete: Complete,
 ) -> tuple[str, str] | None:
     chunk, _score = hit
-    content = complete(
-        [
+    messages = [
             {
                 "role": "system",
                 "content": (
-                    "Select exact evidence for a draft claim. Return JSON only with "
+                    "Select exact evidence for a draft claim. Return one structured object with "
                     "supports_claim (boolean), quote (exact text copied from CONTEXT), "
                     "and rationale (short explanation). Never invent or paraphrase a quote."
                 ),
@@ -238,9 +426,8 @@ def select_evidence(
                     f"page {chunk.page or 'unknown'}\n\nCONTEXT:\n{context}"
                 ),
             },
-        ],
-        json_mode=True,
-    )
+        ]
+    content = _complete_json(complete, messages, _EVIDENCE_SCHEMA)
     payload = _json_object(content)
     quote = str(payload.get("quote", "")).strip()
     rationale = str(payload.get("rationale", "")).strip()
@@ -272,6 +459,25 @@ def template_rationale(_claim: str, _evidence: str) -> str:
     return "Retrieved evidence overlaps with the draft passage; verify the source before citing."
 
 
+def _complete_json(
+    complete: Complete,
+    messages: Sequence[Mapping[str, object]],
+    schema: Mapping[str, object],
+) -> str:
+    """Request schema-constrained JSON when the injected provider supports it."""
+
+    try:
+        parameters = signature(complete).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    accepts_schema = "response_schema" in parameters or any(
+        parameter.kind is parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+    if accepts_schema:
+        return complete(messages, json_mode=True, response_schema=dict(schema))
+    return complete(messages, json_mode=True)
+
+
 def _json_object(content: str) -> dict:
     cleaned = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
     cleaned = re.sub(r"<think>.*$", "", cleaned, flags=re.DOTALL | re.IGNORECASE).strip()
@@ -294,6 +500,8 @@ def _is_valid_quote(quote: str, context: str) -> bool:
     normalized_quote = " ".join(quote.split()).strip()
     normalized_context = " ".join(context.split())
     if not normalized_quote or normalized_quote not in normalized_context:
+        return False
+    if _is_metadata_text(normalized_quote):
         return False
     if normalized_quote.casefold().startswith("section:"):
         return False
