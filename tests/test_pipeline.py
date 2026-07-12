@@ -57,3 +57,54 @@ def test_shared_retrieval_pipeline_drives_search_and_check_rendering():
     report = render_check(items)
     assert "# Citation suggestions" in report
     assert "Direct support." in report
+    assert "- **Title:** Road study" in report
+    assert "- **Support score:** `0.80`" in report
+    assert "- **DOI:** 10/example" in report
+    assert "- **Page:** 1" in report
+    assert "### Excerpt" in report
+    assert "### Why this fits" in report
+
+
+def test_evidence_enrichment_prefers_sentence_excerpts_over_metadata_like_quotes():
+    paper = Paper("P1", "Road study", ("Akpan",), "2024", "10/example")
+    chunk = Chunk(
+        "P1:1:0",
+        paper,
+        "Section: 6. Concluding Remarks South Africa has improved road quality. "
+        "Transport infrastructure promotes cross-border trade and raises domestic output, "
+        "thus fostering regional integration.",
+        page=7,
+    )
+    claims = [{"text": "Transport infrastructure fosters regional integration.", "citation_keys": ()}]
+
+    def embed(texts):
+        return [[1.0, 0.0]]
+
+    def search(_vector, *, limit, query_text):
+        return [(chunk, 0.9)]
+
+    items = enrich_hits(
+        retrieve_claims(claims, embed_queries=embed, search=search, limit=1),
+        context_for=lambda _chunk: chunk.text,
+        select_evidence=lambda _claim, _hit, _context: (
+            "Section: 6. Concluding Remarks",
+            "Heading-like text should be rejected.",
+        ),
+        explain=lambda _claim, evidence: f"Rationale for {evidence}",
+        top_only=True,
+    )
+
+    assert items[0]["evidence"].startswith("Transport infrastructure promotes cross-border trade")
+    assert items[0]["rationale"] == f"Rationale for {items[0]['evidence']}"
+
+
+def test_explain_strips_label_prefixes_from_llm_output():
+    from bibliograph.pipeline.llm_tasks import explain
+
+    content = explain(
+        "A claim",
+        "Some evidence",
+        complete=lambda _messages, json_mode=False: "SUPPORT. The evidence directly addresses the claim.",
+    )
+
+    assert content == "The evidence directly addresses the claim."

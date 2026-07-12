@@ -10,17 +10,7 @@ def render_search(items: Iterable[dict]) -> str:
     claim = items[0]["claim"]["text"] if items else ""
     lines = ["# Local sources", "", f"> Claim: {claim}", ""]
     for index, item in enumerate(items, start=1):
-        chunk = item["chunk"]
-        lines.extend(
-            [
-                f"## {index}. {citation_label(chunk.paper)}",
-                f"Support score: {item['score']:.2f}",
-                f"DOI: {chunk.paper.doi or 'unknown'}",
-                f"Page: {chunk.page or 'unknown'}",
-                f"> Evidence: {item['evidence']}",
-                "",
-            ]
-        )
+        lines.extend(_render_source_card(index, item))
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -28,29 +18,42 @@ def render_check(items: Iterable[dict]) -> str:
     items = list(items)
     lines = ["# Citation suggestions", "", f"Found {len(items)} suggestion(s).", ""]
     for number, item in enumerate(items, start=1):
-        claim = item["claim"]
-        chunk = item["chunk"]
+        lines.extend(_render_source_card(number, item, include_claim=True))
+        lines.extend(["---", ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_source_card(number: int, item: dict, *, include_claim: bool = False) -> list[str]:
+    chunk = item["chunk"]
+    paper = chunk.paper
+    lines = [
+        f"## {number}. {citation_label(paper)}",
+        "",
+        f"- **Title:** {paper.title}",
+        f"- **Support score:** `{item['score']:.2f}`",
+        f"- **DOI:** {paper.doi or 'unknown'}",
+        f"- **Page:** {chunk.page or 'unknown'}",
+    ]
+    if include_claim:
         lines.extend(
             [
-                f"## Suggestion {number}",
-                "",
-                f"**Citation:** {citation_label(chunk.paper)}, {chunk.paper.title}",
-                f"**Support score:** `{item['score']:.2f}`",
                 "",
                 "### Draft claim",
-                f"> {claim['text']}",
-                "",
-                "### Evidence",
-                f"> {item['evidence']}",
-                "",
-                "### Rationale",
-                item["rationale"],
-                "",
-                "---",
-                "",
+                f"> {item['claim']['text']}",
             ]
         )
-    return "\n".join(lines).rstrip() + "\n"
+    lines.extend(
+        [
+            "",
+            "### Excerpt",
+            f"> {item['evidence']}",
+            "",
+            "### Why this fits",
+            item["rationale"],
+            "",
+        ]
+    )
+    return lines
 
 
 def render_status(status: dict) -> str:

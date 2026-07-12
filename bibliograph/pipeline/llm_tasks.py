@@ -84,25 +84,28 @@ def select_evidence(
     payload = _json_object(content)
     quote = str(payload.get("quote", "")).strip()
     rationale = str(payload.get("rationale", "")).strip()
-    if payload.get("supports_claim") and quote and quote in context:
-        return quote, rationale
+    if payload.get("supports_claim") and _is_valid_quote(quote, context):
+        return " ".join(quote.split()), rationale
     return None
 
 
 def explain(claim: str, evidence: str, *, complete: Complete) -> str:
-    return complete(
+    content = complete(
         [
             {
                 "role": "system",
                 "content": (
-                    "Assess whether retrieved evidence supports a draft passage. Do not add facts "
-                    "not present in the evidence. Give one concise rationale."
+                    "Assess whether retrieved evidence supports a draft passage. Return only the "
+                    "explanation text. Do not prefix the answer with labels like SUPPORT, "
+                    "RATIONALE, or ANSWER. Do not use bullets, numbering, or markdown. Keep it "
+                    "to one concise paragraph."
                 ),
             },
             {"role": "user", "content": f"DRAFT:\n{claim}\n\nEVIDENCE:\n{evidence}"},
         ],
         json_mode=False,
     ).strip()
+    return _strip_label_prefix(content)
 
 
 def template_rationale(_claim: str, _evidence: str) -> str:
@@ -125,3 +128,35 @@ def _json_object(content: str) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("LLM response must be a JSON object or array")
     return payload
+
+
+def _is_valid_quote(quote: str, context: str) -> bool:
+    normalized_quote = " ".join(quote.split()).strip()
+    normalized_context = " ".join(context.split())
+    if not normalized_quote or normalized_quote not in normalized_context:
+        return False
+    if normalized_quote.casefold().startswith("section:"):
+        return False
+    if re.fullmatch(r"[-–—\s]*\d+[-–—\s]*", normalized_quote):
+        return False
+    words = normalized_quote.split()
+    if len(words) <= 3 and normalized_quote == normalized_quote.title():
+        return False
+    return True
+
+
+def _strip_label_prefix(text: str) -> str:
+    cleaned = text.strip()
+    cleaned = re.sub(
+        r"^(?:support|rationale|explanation|answer)\.?:\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"^(?:support|rationale|explanation|answer)\.\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return cleaned
