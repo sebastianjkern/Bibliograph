@@ -65,6 +65,32 @@ def test_shared_retrieval_pipeline_drives_search_and_check_rendering():
     assert "### Why this fits" in report
 
 
+def test_rendered_references_are_sorted_by_support_score():
+    paper = Paper("P1", "Road study", ("Ada",), "2024", "10/example")
+    chunk_high = Chunk("P1:1:0", paper, "Road quality improves market access.", page=1)
+    chunk_low = Chunk("P1:2:0", paper, "Infrastructure supports trade.", page=2)
+    items = [
+        {
+            "claim": {"text": "Claim", "citation_keys": ()},
+            "chunk": chunk_low,
+            "score": 0.2,
+            "evidence": "Infrastructure supports trade.",
+            "rationale": "Low score",
+        },
+        {
+            "claim": {"text": "Claim", "citation_keys": ()},
+            "chunk": chunk_high,
+            "score": 0.9,
+            "evidence": "Road quality improves market access.",
+            "rationale": "High score",
+        },
+    ]
+
+    report = render_search(items)
+
+    assert report.index("High score") < report.index("Low score")
+
+
 def test_evidence_enrichment_prefers_sentence_excerpts_over_metadata_like_quotes():
     paper = Paper("P1", "Road study", ("Akpan",), "2024", "10/example")
     chunk = Chunk(

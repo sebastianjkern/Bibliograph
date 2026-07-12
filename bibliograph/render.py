@@ -6,7 +6,7 @@ from .domain import citation_label
 
 
 def render_search(items: Iterable[dict]) -> str:
-    items = list(items)
+    items = _sorted_items(items)
     claim = items[0]["claim"]["text"] if items else ""
     lines = ["# Local sources", "", f"> Claim: {claim}", ""]
     for index, item in enumerate(items, start=1):
@@ -15,7 +15,7 @@ def render_search(items: Iterable[dict]) -> str:
 
 
 def render_check(items: Iterable[dict]) -> str:
-    items = list(items)
+    items = _sorted_items(items)
     lines = ["# Citation suggestions", "", f"Found {len(items)} suggestion(s).", ""]
     for number, item in enumerate(items, start=1):
         lines.extend(_render_source_card(number, item, include_claim=True))
@@ -48,12 +48,17 @@ def _render_source_card(number: int, item: dict, *, include_claim: bool = False)
             "### Excerpt",
             f"> {item['evidence']}",
             "",
-            "### Why this fits",
+            "### Explanation",
             item["rationale"],
             "",
         ]
     )
     return lines
+
+
+def _sorted_items(items: Iterable[dict]) -> list[dict]:
+    enumerated = list(enumerate(items))
+    return [item for _index, item in sorted(enumerated, key=lambda pair: (-pair[1]["score"], pair[0]))]
 
 
 def render_status(status: dict) -> str:
