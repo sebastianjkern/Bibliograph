@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Semantic citation discovery for Zotero libraries and paper drafts"
 requires-python = ">=3.12"
 dependencies = [
-    "sqlite-vec>=0.1.9",
+    "ragtime-graph[sqlite] @ git+https://github.com/sebastianjkern/ragtime.git",
     "python-dotenv>=1.0",
     "rich>=13.0",
 ]

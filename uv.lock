@@ -47,8 +47,8 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "python-dotenv" },
+    { name = "ragtime-graph", extra = ["sqlite"] },
     { name = "rich" },
-    { name = "sqlite-vec" },
 ]
 
 [package.optional-dependencies]
@@ -99,11 +99,11 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyzotero", marker = "extra == 'all'", specifier = ">=1.5" },
     { name = "pyzotero", marker = "extra == 'zotero'", specifier = ">=1.5" },
+    { name = "ragtime-graph", extras = ["sqlite"], git = "https://github.com/sebastianjkern/ragtime.git" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "sentence-transformers", marker = "extra == 'all'", specifier = ">=3.0" },
     { name = "sentence-transformers", marker = "extra == 'local-embeddings'", specifier = ">=3.0" },
-    { name = "sqlite-vec", specifier = ">=0.1.9" },
 ]
 provides-extras = ["pdf", "zotero", "local-embeddings", "openai", "remote", "all", "dev"]
 
@@ -1292,6 +1292,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/17/ac/83ae168f63c2ae1c0196230990572b05bc601594898b593f4d922eac56f5/pyzotero-1.13.2.tar.gz", hash = "sha256:56b8f82646e8c757933a9ef1baeec7ea84191faef9a626ed221113ef418e7af4", size = 554797, upload-time = "2026-06-23T15:01:30.03Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/89/1e/3403e3bcd056c169d375a6e1fe14853316d76b9c2dc7ab22042ff553f0ab/pyzotero-1.13.2-py3-none-any.whl", hash = "sha256:17673a9a225de49e152f14621f62d8c5f67103612b859f25a256ef04ea08e65d", size = 51645, upload-time = "2026-06-23T15:01:28.61Z" },
+]
+
+[[package]]
+name = "ragtime-graph"
+version = "0.1.0"
+source = { git = "https://github.com/sebastianjkern/ragtime.git#5e032296d946a0f638fb8225a0de59798f43a0ac" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+sqlite = [
+    { name = "sqlite-vec" },
 ]
 
 [[package]]

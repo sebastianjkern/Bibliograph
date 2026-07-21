@@ -6,22 +6,26 @@ from pathlib import Path
 from typing import Any
 
 from rich.console import Console
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 from ..adapters.acquisition import acquire_pdf
 from ..adapters.zotero import discover_collection, resolve_collection
-from ..pipeline.indexing import index_document
 
 
 def sync_library(
     settings: Mapping[str, Any],
     *,
     store,
-    embedding: Mapping[str, Any],
     zotero: Any,
     strategies: Iterable[Callable],
     extract_pages: Callable,
-    chunk_document: Callable,
     storage_dirs: Iterable[str | Path] = (),
     collection: str | None = None,
     show_progress: bool = True,
@@ -59,7 +63,11 @@ def sync_library(
         else nullcontext()
     )
     with progress_cm as progress:
-        task_id = progress.add_task("Synchronizing documents", total=len(documents)) if show_progress and documents else None
+        task_id = (
+            progress.add_task("Synchronizing documents", total=len(documents))
+            if show_progress and documents
+            else None
+        )
         for document in documents:
             source_key = str(document["source_key"])
             title = document["paper"].title
@@ -97,17 +105,12 @@ def sync_library(
             try:
                 if task_id is not None:
                     progress.update(task_id, description=f"Indexing {title}")
-                result = index_document(
+                result = store.index_pdf(
                     document["paper"],
                     source_key,
                     document.get("version"),
                     path,
                     extract_pages=extract_pages,
-                    chunk_document=chunk_document,
-                    embed_documents=embedding["embed_documents"],
-                    store=store,
-                    batch_size=int(settings["embedding"]["batch_size"]),
-                    supported_kinds=embedding.get("kinds", ("text",)),
                 )
             except Exception as error:
                 store.record_document_failure(

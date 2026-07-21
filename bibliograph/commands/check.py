@@ -16,15 +16,14 @@ from rich.progress import (
 )
 
 from ..pipeline.drafts import parse_draft_file
-from ..pipeline.retrieval import search_claim
+from ..pipeline.retrieval import search_claim_with_ragtime
 from ..render import render_check
 
 
 def check(
     draft: str | Path,
     *,
-    embedding: Mapping[str, Any],
-    store,
+    backend,
     llm_tools: Mapping[str, Any],
     limit: int = 5,
     min_score: float = 0.0,
@@ -45,16 +44,14 @@ def check(
                 if progress is not None:
                     progress.update(task_id, description=description, refresh=True)
 
-            result = search_claim(
+            result = search_claim_with_ragtime(
                 claim,
-                embed_queries=embedding["embed_queries"],
-                search=store.search,
+                backend=backend,
                 limit=limit,
                 min_score=min_score,
                 expand=llm_tools.get("expand"),
                 rerank=llm_tools.get("rerank"),
                 progress=update_progress,
-                context_for=store.context_for,
                 select_evidence=llm_tools.get("select_evidence"),
                 explain=llm_tools.get("explain"),
                 enrich=enrich,

@@ -18,6 +18,65 @@ SelectEvidence = Callable[[str, ScoredChunk, str], tuple[str, str] | None]
 Explain = Callable[[str, str], str]
 
 
+def search_claim_with_ragtime(
+    claim: Claim,
+    *,
+    backend,
+    limit: int = 5,
+    min_score: float = 0.0,
+    expand: Expand | None = None,
+    rerank: Rerank | None = None,
+    progress: ProgressUpdate | None = None,
+    select_evidence: SelectEvidence | None = None,
+    explain: Explain | None = None,
+    enrich: bool = True,
+    top_only: bool = False,
+) -> dict:
+    """Retrieve through Ragtime and retain Bibliograph's citation result contract."""
+    text = claim["text"].strip()
+    if not text:
+        raise ValueError("A claim is required")
+    alternatives: list[str] = []
+    if expand is not None:
+        if progress is not None:
+            progress("Preparing query expansion")
+        alternatives = _run_expander(expand, text, progress)
+    if progress is not None:
+        progress("Retrieving evidence · 1/1 queries (Ragtime)")
+    hits, score_details = backend.retrieve(
+        text,
+        alternatives=alternatives,
+        limit=max(limit, 10),
+    )
+    hits = [hit for hit in hits if hit[1] >= min_score]
+    if rerank is not None:
+        if progress is not None:
+            progress("Reranking Ragtime candidates")
+        hits = _run_reranker(rerank, text, hits, progress)
+    selected_hits = _top_article_hits(hits, limit=10)
+    result = {
+        "claim": claim,
+        "queries": (text, *alternatives),
+        "hits": selected_hits,
+        "score_details": score_details,
+    }
+    if enrich:
+        enrichment_hits = selected_hits[:1] if top_only else selected_hits
+        result["items"] = enrich_hits(
+            [{**result, "hits": enrichment_hits}],
+            context_for=lambda chunk: chunk.text,
+            select_evidence=select_evidence,
+            explain=explain,
+        )
+    else:
+        result["items"] = enrich_hits(
+            [result],
+            context_for=lambda chunk: chunk.text,
+            top_only=top_only,
+        )
+    return result
+
+
 def search_claim(
     claim: Claim,
     *,

@@ -19,15 +19,20 @@ from .adapters.acquisition import (
     zotero_api_strategy,
     zotero_storage_strategy,
 )
-from .adapters.pdf import chunk_document, extract_pages
-from .adapters.sqlite import SQLiteStore, open_staging
+from .adapters.pdf import extract_pages
+from .adapters.ragtime import (
+    RagtimeBackend,
+    inspect_ragtime_index,
+    is_ragtime_index,
+    open_ragtime_staging,
+)
+from .adapters.sqlite import SQLiteStore
 from .adapters.zotero import build_zotero, zotero_storage_dirs
 from .commands.check import check
 from .commands.search import search
 from .commands.status import status
 from .commands.sync import sync_library
 from .logging_utils import get_logger
-from .pipeline.indexing import INDEXING_FINGERPRINT
 from .pipeline.llm_tasks import (
     expand_query,
     explain,
@@ -60,39 +65,25 @@ def run_sync(
     database = settings["db"]
 
     if rebuild:
-        with open_staging(
-            database,
-            embedding["id"],
-            indexing_fingerprint=INDEXING_FINGERPRINT,
-        ) as store:
+        with open_ragtime_staging(database, embedding=embedding) as store:
             return sync_library(
                 settings,
                 store=store,
-                embedding=embedding,
                 zotero=zotero,
                 strategies=strategies,
                 extract_pages=extract_pages,
-                chunk_document=chunk_document,
                 storage_dirs=storage_dirs,
                 collection=collection,
                 show_progress=show_progress,
             )
 
-    with SQLiteStore(
-        database,
-        mode="write",
-        embedding_id=embedding["id"],
-        indexing_fingerprint=INDEXING_FINGERPRINT,
-    ) as store:
-        store.assert_compatible(embedding["id"], INDEXING_FINGERPRINT)
+    with RagtimeBackend(database, mode="write", embedding=embedding) as store:
         return sync_library(
             settings,
             store=store,
-            embedding=embedding,
             zotero=zotero,
             strategies=strategies,
             extract_pages=extract_pages,
-            chunk_document=chunk_document,
             storage_dirs=storage_dirs,
             collection=collection,
             show_progress=show_progress,
@@ -111,12 +102,10 @@ def run_search(
     enrich: bool = True,
 ) -> dict:
     embedding = build_embedding(settings)
-    with SQLiteStore(settings["db"], mode="read") as store:
-        store.assert_compatible(embedding["id"], INDEXING_FINGERPRINT)
+    with RagtimeBackend(settings["db"], mode="read", embedding=embedding) as store:
         return search(
             claim,
-            embedding=embedding,
-            store=store,
+            backend=store,
             llm_tools=_llm_tools(
                 settings,
                 disabled=no_llm,
@@ -141,12 +130,10 @@ def run_check(
     enrich: bool = True,
 ) -> dict:
     embedding = build_embedding(settings)
-    with SQLiteStore(settings["db"], mode="read") as store:
-        store.assert_compatible(embedding["id"], INDEXING_FINGERPRINT)
+    with RagtimeBackend(settings["db"], mode="read", embedding=embedding) as store:
         return check(
             draft,
-            embedding=embedding,
-            store=store,
+            backend=store,
             llm_tools=_llm_tools(
                 settings,
                 disabled=no_llm,
@@ -169,8 +156,22 @@ def run_status(settings: Settings, *, probe: bool = False) -> dict:
         probes.append(_zotero_probe(settings))
     if not database.is_file():
         return status(path=database, probes=probes)
+    if is_ragtime_index(database):
+        summary = inspect_ragtime_index(database)
+        return status(_StaticStats(summary), probes=probes)
+    # Legacy indexes remain inspectable, but no search or sync path uses their RAG backend.
     with SQLiteStore(database, mode="read") as store:
-        return status(store, probes=probes)
+        summary = dict(store.stats())
+        summary["rebuild_required"] = True
+        return status(_StaticStats(summary), probes=probes)
+
+
+class _StaticStats:
+    def __init__(self, value: dict) -> None:
+        self.value = value
+
+    def stats(self) -> dict:
+        return self.value
 
 
 def _llm_tools(

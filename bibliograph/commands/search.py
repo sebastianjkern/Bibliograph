@@ -13,15 +13,14 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from ..pipeline.retrieval import search_claim
+from ..pipeline.retrieval import search_claim_with_ragtime
 from ..render import render_search
 
 
 def search(
     claim: str,
     *,
-    embedding: Mapping[str, Any],
-    store,
+    backend,
     llm_tools: Mapping[str, Any],
     limit: int = 5,
     min_score: float = 0.0,
@@ -46,16 +45,14 @@ def search(
             if progress is not None
             else None
         )
-        result = search_claim(
+        result = search_claim_with_ragtime(
             {"text": claim, "line_start": None, "citation_keys": (), "source_format": None},
-            embed_queries=embedding["embed_queries"],
-            search=store.search,
+            backend=backend,
             limit=limit,
             min_score=min_score,
             expand=llm_tools.get("expand"),
             rerank=llm_tools.get("rerank"),
             progress=update_progress,
-            context_for=store.context_for,
             select_evidence=llm_tools.get("select_evidence"),
             explain=llm_tools.get("explain"),
             enrich=enrich,
