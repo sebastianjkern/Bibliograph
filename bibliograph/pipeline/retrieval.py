@@ -18,7 +18,7 @@ SelectEvidence = Callable[[str, ScoredChunk, str], tuple[str, str] | None]
 Explain = Callable[[str, str], str]
 
 
-def search_claim_with_ragtime(
+def _search_claim_with_backend(
     claim: Claim,
     *,
     backend,
@@ -32,7 +32,7 @@ def search_claim_with_ragtime(
     enrich: bool = True,
     top_only: bool = False,
 ) -> dict:
-    """Retrieve through Ragtime and retain Bibliograph's citation result contract."""
+    """Retrieve through the configured backend and retain Bibliograph's citation result contract."""
     text = claim["text"].strip()
     if not text:
         raise ValueError("A claim is required")
@@ -42,7 +42,7 @@ def search_claim_with_ragtime(
             progress("Preparing query expansion")
         alternatives = _run_expander(expand, text, progress)
     if progress is not None:
-        progress("Retrieving evidence · 1/1 queries (Ragtime)")
+        progress("Retrieving evidence · 1/1 queries")
     hits, score_details = backend.retrieve(
         text,
         alternatives=alternatives,
@@ -51,7 +51,7 @@ def search_claim_with_ragtime(
     hits = [hit for hit in hits if hit[1] >= min_score]
     if rerank is not None:
         if progress is not None:
-            progress("Reranking Ragtime candidates")
+            progress("Reranking retrieval candidates")
         hits = _run_reranker(rerank, text, hits, progress)
     selected_hits = _top_article_hits(hits, limit=10)
     result = {
@@ -78,6 +78,29 @@ def search_claim_with_ragtime(
 
 
 def search_claim(
+    claim: Claim,
+    *,
+    backend=None,
+    embed_queries: EmbedQueries | None = None,
+    search: Search | None = None,
+    **options,
+) -> dict:
+    """Dispatch to the backend or injected-search retrieval interface."""
+    if backend is not None:
+        if embed_queries is not None or search is not None:
+            raise TypeError("Pass either backend or both embed_queries and search")
+        return _search_claim_with_backend(claim, backend=backend, **options)
+    if embed_queries is None or search is None:
+        raise TypeError("Pass backend or both embed_queries and search")
+    return _search_claim_with_explicit_search(
+        claim,
+        embed_queries=embed_queries,
+        search=search,
+        **options,
+    )
+
+
+def _search_claim_with_explicit_search(
     claim: Claim,
     *,
     embed_queries: EmbedQueries,
@@ -253,7 +276,7 @@ def retrieve_claims(
     progress: ProgressUpdate | None = None,
 ) -> list[dict]:
     return [
-        search_claim(
+        _search_claim_with_explicit_search(
             claim,
             embed_queries=embed_queries,
             search=search,

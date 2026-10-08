@@ -4,10 +4,10 @@ import re
 
 import pytest
 
-from bibliograph.adapters.ragtime import (
-    RagtimeBackend,
-    RagtimeIndexError,
-    inspect_ragtime_index,
+from bibliograph.adapters.ikarus import (
+    IkarusBackend,
+    IkarusIndexError,
+    inspect_ikarus_index,
 )
 from bibliograph.domain import Paper
 
@@ -26,32 +26,28 @@ def _embedding():
         "id": "test/scientific-v1",
         "embed_documents": embed,
         "embed_queries": embed,
-        "batch_size": 8,
+        "probe": lambda: {"dimension": 5},
+        "kinds": ("text",),
     }
 
 
-def test_ragtime_backend_indexes_scientific_papers_and_returns_bibliograph_chunks(tmp_path):
+def test_ikarus_backend_indexes_papers_and_restores_chunk_context(tmp_path):
     database = tmp_path / "index.db"
     road_pdf = tmp_path / "road.pdf"
     biology_pdf = tmp_path / "biology.pdf"
     road_pdf.write_bytes(b"%PDF-road")
     biology_pdf.write_bytes(b"%PDF-biology")
 
-    with RagtimeBackend(database, embedding=_embedding(), mode="write") as backend:
+    with IkarusBackend(database, embedding=_embedding(), mode="write") as backend:
         backend.index_pdf(
             Paper("ROAD", "Roads and Markets", ("Ada Author",), "2024", "10.1/road"),
-            "ROAD",
-            "1",
-            road_pdf,
+            "ROAD", "1", road_pdf,
             extract_pages=lambda _path: [
                 (1, "Better road quality lowers trade costs and expands market access.", "Results")
             ],
         )
         backend.index_pdf(
-            Paper("BIO", "Cell Biology"),
-            "BIO",
-            "1",
-            biology_pdf,
+            Paper("BIO", "Cell Biology"), "BIO", "1", biology_pdf,
             extract_pages=lambda _path: [(3, "Protein folding occurs inside a cell.", "Methods")],
         )
         hits, details = backend.retrieve("road trade market access", limit=5)
@@ -61,12 +57,12 @@ def test_ragtime_backend_indexes_scientific_papers_and_returns_bibliograph_chunk
     assert hits[0][0].page == 1
     assert hits[0][0].section == "Results"
     assert hits[0][0].chunk_id in details
-    assert inspect_ragtime_index(database)["documents"] == 2
+    assert inspect_ikarus_index(database)["documents"] == 2
 
 
-def test_ragtime_backend_rejects_legacy_databases_with_rebuild_guidance(tmp_path):
+def test_ikarus_backend_rejects_legacy_databases_with_rebuild_guidance(tmp_path):
     database = tmp_path / "legacy.db"
-    database.write_bytes(b"not a Ragtime database")
+    database.write_bytes(b"not an Ikarus database")
 
-    with pytest.raises(RagtimeIndexError, match="sync --rebuild"):
-        RagtimeBackend(database, embedding=_embedding(), mode="read")
+    with pytest.raises(IkarusIndexError, match="sync --rebuild"):
+        IkarusBackend(database, embedding=_embedding(), mode="read")

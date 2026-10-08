@@ -6,7 +6,7 @@ from time import sleep
 import pytest
 
 from bibliograph import bootstrap
-from bibliograph.adapters.ragtime import RagtimeBackend
+from bibliograph.adapters.ikarus import IkarusBackend
 from bibliograph.adapters.sqlite import SQLiteStore
 from bibliograph.commands.status import status
 from bibliograph.domain import Chunk, Paper
@@ -49,10 +49,10 @@ def _seed_store(path: Path) -> tuple[Paper, Chunk]:
     return paper, chunk
 
 
-def _seed_ragtime_store(path: Path) -> None:
+def _seed_ikarus_store(path: Path) -> None:
     paper = Paper("P1", "A paper", ("Ada",), "2024")
     settings = _hash_settings(str(path))
-    with RagtimeBackend(path, mode="write", embedding=build_embedding(settings)) as backend:
+    with IkarusBackend(path, mode="write", embedding=build_embedding(settings)) as backend:
         backend.index_pdf(
             paper,
             "A1",
@@ -319,7 +319,7 @@ def test_rerank_batches_run_concurrently_and_keep_batch_order():
 def test_search_with_llm_off_never_constructs_a_chat_provider(monkeypatch):
     with TemporaryDirectory(dir=".") as directory:
         path = Path(directory) / "index.db"
-        _seed_ragtime_store(path)
+        _seed_ikarus_store(path)
         settings = _hash_settings(str(path))
         monkeypatch.setattr(
             "bibliograph.bootstrap.build_chat",
@@ -336,7 +336,7 @@ def test_read_commands_leave_existing_database_bytes_unchanged_and_skip_zotero(m
         path = Path(directory) / "index.db"
         draft = Path(directory) / "draft.tex"
         draft.write_text("Road quality changes trade outcomes.", encoding="utf-8")
-        _seed_ragtime_store(path)
+        _seed_ikarus_store(path)
         before = path.read_bytes()
         settings = _hash_settings(str(path))
         monkeypatch.setattr(

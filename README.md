@@ -2,7 +2,7 @@
 
 # Bibliograph
 
-Bibliograph finds grounded citation evidence in a local Zotero-backed paper library. It uses [Ragtime](https://github.com/sebastianjkern/ragtime) to turn PDFs into a SQLite-backed scientific-paper graph, combine semantic and lexical retrieval, expand through paper/section/citation relationships, and rank the resulting evidence. Bibliograph can additionally use an LLM for query expansion, query-aware reranking, quote selection, and short rationales.
+Bibliograph finds grounded citation evidence in a local Zotero-backed paper library. [Ikarus](https://github.com/sebastianjkern/ikarus) provides its SQLite-backed vector, lexical, and graph retrieval infrastructure, while Bibliograph retains scientific-paper graph policy, PDF parsing, citation metadata, and presentation. Bibliograph can additionally use an LLM for query expansion, query-aware reranking, quote selection, and short rationales.
 
 The project is organized around one configured pipeline selected at startup: provider adapters are independent from retrieval, indexing, persistence, and CLI parsing. A provider never reads command-line arguments or environment variables itself.
 
@@ -100,7 +100,7 @@ When the `rerank` or `evidence` stages are enabled, Bibliograph requests structu
 
 ## Commands
 
-Only `sync` changes the database. The read commands never create, migrate, clear, or update an index.
+`sync` and `ingest-pdfs` change the database. Search, check, and status do not update the index.
 
 ```bash
 # Incrementally synchronize the configured or named Zotero collection.
@@ -109,6 +109,10 @@ uv run bibliograph sync "My Collection"
 
 # Build a sibling staging database, validate it, and atomically replace the live one.
 uv run bibliograph sync --rebuild
+
+# Index PDFs in a local directory (recursive by default; no Zotero required).
+uv run bibliograph ingest-pdfs ./papers
+uv run bibliograph ingest-pdfs ./papers --non-recursive
 
 # Search the existing index for a claim.
 uv run bibliograph search "Road infrastructure improves regional market access"
@@ -123,9 +127,9 @@ uv run bibliograph status
 uv run bibliograph status --probe
 ```
 
-`status --probe` also checks Zotero access. `search` and `check` accept `--limit`, `--min-score`, `--no-llm`, `--no-rerank`, `--no-evidence-extraction`, `--no-enrichment`, and `--output`. Use `--no-llm` to keep all optional LLM stages disabled; Ragtime still performs deterministic hybrid and graph retrieval. `--no-enrichment` disables LLM evidence selection and rationale generation while retaining deterministic excerpts. With the `expand` stage enabled, the LLM generates bounded paraphrase, support, contradiction, causal, terminology, and related hypotheses for Ragtime's query plan. Ragtime deduplicates semantic and lexical seeds, expands them through the scientific-paper graph, and produces the base ranking. An enabled LLM reranker then refines those candidates before Bibliograph keeps the strongest passage from each of the top 10 distinct articles for enrichment. A rebuild validates the exact embedding model before replacing the live database. If an embedding provider cannot be reached, the live database remains untouched. Optional LLM failures are logged and fall back deterministically; structured-output failures follow the same optional/required behavior, and `llm.mode = "required"` makes them command errors instead.
+`status --probe` also checks Zotero access. `search` and `check` accept `--limit`, `--min-score`, `--no-llm`, `--no-rerank`, `--no-evidence-extraction`, `--no-enrichment`, and `--output`. Use `--no-llm` to keep all optional LLM stages disabled; Ikarus performs deterministic hybrid and graph retrieval. `--no-enrichment` disables LLM evidence selection and rationale generation while retaining deterministic excerpts. With the `expand` stage enabled, the LLM generates bounded paraphrase, support, contradiction, causal, terminology, and related hypotheses for Ikarus's query plan. Ikarus deduplicates semantic and lexical seeds, expands them through Bibliograph's scientific-paper graph, and produces the base ranking. An enabled LLM reranker then refines those candidates before Bibliograph keeps the strongest passage from each of the top 10 distinct articles for enrichment. A rebuild validates the exact embedding model before replacing the live database. If an embedding provider cannot be reached, the live database remains untouched. Optional LLM failures are logged and fall back deterministically; structured-output failures follow the same optional/required behavior, and `llm.mode = "required"` makes them command errors instead.
 
-Each database has one active Ragtime vector space and embedding fingerprint. A changed provider or model produces rebuild guidance rather than silently clearing vectors. Databases created by Bibliograph's pre-Ragtime backend are recognized for status reporting but cannot be searched or incrementally synchronized; migrate them with `sync --rebuild`.
+Each database has one active Ikarus vector space and embedding fingerprint. A changed provider or model produces rebuild guidance rather than silently clearing vectors. Databases created by Bibliograph's legacy backend are recognized for status reporting but cannot be searched or incrementally synchronized; migrate them with `sync --rebuild`.
 
 For one compatibility release, `find-sources`/`find` delegate to `search`, `suggest` delegates to `check`, and `check DRAFT COLLECTION` runs a sync before checking. These shims issue deprecation warnings. The old global `--rebuild-db` spelling is also retained only for legacy use; prefer `sync --rebuild`.
 
@@ -138,9 +142,9 @@ bibliograph/
   settings.py     TOML, environment, and CLI resolution
   domain.py       Paper and Chunk durable records
   providers/      explicit embedding/chat factory registries
-  adapters/       Ragtime, legacy-status, Zotero, PDF, and acquisition adapters
+  adapters/       Ikarus, legacy-status, Zotero, PDF, and acquisition adapters
   pipeline/       citation result shaping, LLM tasks, and draft parsing
-  commands/       sync, search, check, and status use cases
+  commands/       sync, PDF ingestion, search, check, and status use cases
   render.py       pure Markdown rendering
 ```
 

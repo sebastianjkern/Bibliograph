@@ -16,7 +16,7 @@ from rich.progress import (
 )
 
 from ..pipeline.drafts import parse_draft_file
-from ..pipeline.retrieval import search_claim_with_ragtime
+from ..pipeline.retrieval import search_claim
 from ..render import render_check
 
 
@@ -44,7 +44,7 @@ def check(
                 if progress is not None:
                     progress.update(task_id, description=description, refresh=True)
 
-            result = search_claim_with_ragtime(
+            result = search_claim(
                 claim,
                 backend=backend,
                 limit=limit,

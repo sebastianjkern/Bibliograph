@@ -13,7 +13,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from ..pipeline.retrieval import search_claim_with_ragtime
+from ..pipeline.retrieval import search_claim
 from ..render import render_search
 
 
@@ -45,7 +45,7 @@ def search(
             if progress is not None
             else None
         )
-        result = search_claim_with_ragtime(
+        result = search_claim(
             {"text": claim, "line_start": None, "citation_keys": (), "source_format": None},
             backend=backend,
             limit=limit,

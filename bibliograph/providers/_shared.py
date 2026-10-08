@@ -7,14 +7,16 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, TypedDict
 
+from core.embedding import BatchEmbeddingStrategy
+
 
 class EmbeddingRuntime(TypedDict):
     """The callable capabilities required by the indexing and retrieval paths."""
 
     id: str
     kinds: tuple[str, ...]
-    embed_documents: Callable[[Sequence[str]], list[list[float]]]
-    embed_queries: Callable[[Sequence[str]], list[list[float]]]
+    embed_documents: BatchEmbeddingStrategy
+    embed_queries: BatchEmbeddingStrategy
     probe: Callable[[], dict[str, object]]
 
 

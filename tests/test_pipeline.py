@@ -261,3 +261,24 @@ def test_explain_strips_label_prefixes_from_llm_output():
     )
 
     assert content == "The evidence directly addresses the claim."
+
+
+def test_backend_retrieval_search_claim_accepts_backend_keyword():
+    paper = Paper("P1", "Road study")
+    chunk = Chunk("P1:1:0", paper, "Road quality improves market access.")
+
+    class Backend:
+        def retrieve(self, query, *, alternatives, limit):
+            assert query == "Road quality affects market access."
+            assert alternatives == []
+            assert limit == 10
+            return [(chunk, 0.8)], {chunk.chunk_id: {"retrieval": 0.8}}
+
+    result = search_claim(
+        {"text": "Road quality affects market access.", "citation_keys": ()},
+        backend=Backend(),
+        enrich=False,
+    )
+
+    assert result["hits"] == [(chunk, 0.8)]
+    assert result["items"][0]["chunk"] == chunk

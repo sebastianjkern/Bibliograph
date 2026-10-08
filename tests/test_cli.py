@@ -13,6 +13,36 @@ def test_cli_exposes_the_four_primary_commands():
     assert parser.parse_args(["status"]).command == "status"
 
 
+def test_help_reports_the_resolved_provider_configuration(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "bibliograph.cli.load_settings",
+        lambda *_args: {
+            "db": "index.db",
+            "pdf_dir": "papers",
+            "collection": "Research",
+            "embedding": {
+                "provider": "ollama",
+                "model": "nomic-embed-text-v2-moe:latest",
+                "base_url": "http://localhost:11434",
+            },
+            "llm": {
+                "provider": "ollama",
+                "model": "edtorre/gemma4:12qat-hermes",
+                "base_url": "http://localhost:11434",
+                "mode": "optional",
+                "stages": ["rerank", "evidence"],
+            },
+        },
+    )
+
+    assert main(["--help"]) == 0
+    output = capsys.readouterr().out
+    assert "nomic-embed-text-v2-moe:latest" in output
+    assert "edtorre/gemma4:12qat-hermes" in output
+    assert "ollama" in output
+    assert "rerank, evidence" in output
+
+
 def test_search_progress_tracks_async_batch_completion_fractionally():
     assert _stage_progress("Expanding queries · 2/4 complete") == 0.5
     assert _stage_progress("Embedding expanded queries") == 2.0

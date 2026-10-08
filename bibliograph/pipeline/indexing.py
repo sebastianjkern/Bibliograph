@@ -4,6 +4,8 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
+from core.embedding import BatchEmbeddingStrategy
+
 from ..domain import Chunk, Paper
 from ..logging_utils import get_logger
 
@@ -14,7 +16,7 @@ INDEXING_FINGERPRINT = "pdf-body-v1:sentence-chunks-v1:max-words=120:overlap-wor
 
 ExtractPages = Callable[[str | Path], list[tuple[int, str, str | None]]]
 ChunkDocument = Callable[[Paper, Iterable[tuple[int, str, str | None]]], list[Chunk]]
-EmbedDocuments = Callable[[Sequence[str]], list[list[float]]]
+EmbedDocuments = BatchEmbeddingStrategy
 
 
 def index_document(

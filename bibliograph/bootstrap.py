@@ -20,15 +20,16 @@ from .adapters.acquisition import (
     zotero_storage_strategy,
 )
 from .adapters.pdf import extract_pages
-from .adapters.ragtime import (
-    RagtimeBackend,
-    inspect_ragtime_index,
-    is_ragtime_index,
-    open_ragtime_staging,
+from .adapters.ikarus import (
+    IkarusBackend,
+    inspect_ikarus_index,
+    is_ikarus_index,
+    open_ikarus_staging,
 )
 from .adapters.sqlite import SQLiteStore
 from .adapters.zotero import build_zotero, zotero_storage_dirs
 from .commands.check import check
+from .commands.ingest_pdfs import ingest_pdfs
 from .commands.search import search
 from .commands.status import status
 from .commands.sync import sync_library
@@ -65,7 +66,7 @@ def run_sync(
     database = settings["db"]
 
     if rebuild:
-        with open_ragtime_staging(database, embedding=embedding) as store:
+        with open_ikarus_staging(database, embedding=embedding) as store:
             return sync_library(
                 settings,
                 store=store,
@@ -77,7 +78,7 @@ def run_sync(
                 show_progress=show_progress,
             )
 
-    with RagtimeBackend(database, mode="write", embedding=embedding) as store:
+    with IkarusBackend(database, mode="write", embedding=embedding) as store:
         return sync_library(
             settings,
             store=store,
@@ -87,6 +88,23 @@ def run_sync(
             storage_dirs=storage_dirs,
             collection=collection,
             show_progress=show_progress,
+        )
+
+
+def run_ingest_pdfs(
+    settings: Settings,
+    directory: str | Path,
+    *,
+    recursive: bool = True,
+) -> dict:
+    embedding = build_embedding(settings)
+    embedding["probe"]()
+    with IkarusBackend(settings["db"], mode="write", embedding=embedding) as store:
+        return ingest_pdfs(
+            directory,
+            store=store,
+            extract_pages=extract_pages,
+            recursive=recursive,
         )
 
 
@@ -102,7 +120,7 @@ def run_search(
     enrich: bool = True,
 ) -> dict:
     embedding = build_embedding(settings)
-    with RagtimeBackend(settings["db"], mode="read", embedding=embedding) as store:
+    with IkarusBackend(settings["db"], mode="read", embedding=embedding) as store:
         return search(
             claim,
             backend=store,
@@ -130,7 +148,7 @@ def run_check(
     enrich: bool = True,
 ) -> dict:
     embedding = build_embedding(settings)
-    with RagtimeBackend(settings["db"], mode="read", embedding=embedding) as store:
+    with IkarusBackend(settings["db"], mode="read", embedding=embedding) as store:
         return check(
             draft,
             backend=store,
@@ -156,8 +174,8 @@ def run_status(settings: Settings, *, probe: bool = False) -> dict:
         probes.append(_zotero_probe(settings))
     if not database.is_file():
         return status(path=database, probes=probes)
-    if is_ragtime_index(database):
-        summary = inspect_ragtime_index(database)
+    if is_ikarus_index(database):
+        summary = inspect_ikarus_index(database)
         return status(_StaticStats(summary), probes=probes)
     # Legacy indexes remain inspectable, but no search or sync path uses their RAG backend.
     with SQLiteStore(database, mode="read") as store:

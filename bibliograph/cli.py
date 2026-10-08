@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
 
-from .bootstrap import run_check, run_search, run_status, run_sync
+from .bootstrap import run_check, run_ingest_pdfs, run_search, run_status, run_sync
 from .logging_utils import configure_logging, get_logger
 from .providers.registry import chat_names, embedding_names
 from .render import render_sync
@@ -19,7 +19,15 @@ from .settings import load_settings
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Find and verify citation evidence in a local Zotero-backed library."
+        description="Find and verify citation evidence in a local Zotero-backed library.",
+        add_help=False,
+    )
+    parser.add_argument(
+        "-h",
+        "--help",
+        action="store_true",
+        dest="show_help",
+        help="Show this help message and the active configuration summary",
     )
     parser.add_argument("--config", type=Path, help="Path to bibliograph.toml")
     parser.add_argument(
@@ -40,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,
     )
 
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command")
 
     sync = subparsers.add_parser(
         "sync",
@@ -54,6 +62,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_legacy_rebuild_argument(sync)
     sync.add_argument("--output", type=Path, help="Write the synchronization summary to a file")
+
+    ingest = subparsers.add_parser(
+        "ingest-pdfs",
+        help="Index PDFs from a local folder without Zotero",
+    )
+    ingest.add_argument("directory", type=Path, help="Folder containing PDF files")
+    ingest.add_argument(
+        "--non-recursive",
+        action="store_true",
+        help="Only inspect PDFs directly inside the folder",
+    )
+    ingest.add_argument("--output", type=Path, help="Write the ingestion summary to a file")
 
     search = subparsers.add_parser("search", help="Search indexed sources for one claim")
     search.add_argument("claim")
@@ -159,7 +179,14 @@ def _add_query_options(parser: argparse.ArgumentParser) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.show_help:
+        parser.print_help()
+        _print_configuration_summary(args.config, args.profile)
+        return 0
+    if args.command is None:
+        parser.error("a command is required (use --help for usage and configuration)")
     configure_logging(args.log_level, args.quiet)
     logger = get_logger("cli")
     try:
@@ -176,6 +203,17 @@ def main(argv: list[str] | None = None) -> int:
                 show_progress=not args.quiet,
             )
             _emit(render_sync(result), args.output)
+            return 0
+
+        if args.command == "ingest-pdfs":
+            if legacy_rebuild:
+                raise ValueError("`--rebuild-db` is only supported by `sync --rebuild`")
+            result = run_ingest_pdfs(
+                settings,
+                args.directory,
+                recursive=not args.non_recursive,
+            )
+            _emit(_render_ingest_summary(result), args.output)
             return 0
 
         if args.command in {"search", "legacy-search"}:
@@ -236,6 +274,58 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as error:
         logger.error("%s", error)
         return 1
+
+
+def _print_configuration_summary(config_path: Path | None, profile: str) -> None:
+    """Print resolved non-secret settings without probing configured services."""
+    selected_path = Path("bibliograph.toml") if config_path is None else config_path
+    try:
+        settings = load_settings(config_path, profile)
+    except Exception as error:
+        Console().print(
+            f"\nConfiguration\n  path: {selected_path}\n  profile: {profile}\n"
+            f"  error: {error}",
+            markup=False,
+        )
+        return
+
+    embedding = settings.get("embedding", {})
+    llm = settings.get("llm", {})
+    stages = ", ".join(str(stage) for stage in llm.get("stages", ())) or "none"
+    lines = [
+        "",
+        "Configuration",
+        f"  path: {selected_path}",
+        f"  profile: {profile}",
+        f"  database: {settings.get('db')}",
+        f"  PDF directory: {settings.get('pdf_dir')}",
+        f"  collection: {settings.get('collection')}",
+        "",
+        "Providers",
+        f"  embeddings: {embedding.get('provider')} / {embedding.get('model')}",
+        f"    endpoint: {embedding.get('base_url')}",
+        f"  LLM: {llm.get('provider')} / {llm.get('model')}",
+        f"    endpoint: {llm.get('base_url')}",
+        f"    mode: {llm.get('mode')}",
+        f"    stages: {stages}",
+    ]
+    Console().print("\n".join(lines), markup=False)
+
+
+def _render_ingest_summary(result: dict[str, Any]) -> str:
+    lines = [
+        f"# PDF ingestion: {result['directory']}",
+        "",
+        f"- PDFs found: {result['discovered']}",
+        f"- Indexed: {len(result['indexed'])}",
+        f"- Unchanged: {len(result['unchanged'])}",
+        f"- Invalid PDFs skipped: {len(result['invalid'])}",
+    ]
+    for item in result["indexed"]:
+        lines.append(f"- Indexed `{item['path']}` ({item['chunks']} chunks)")
+    for path in result["invalid"]:
+        lines.append(f"- Skipped invalid PDF `{path}`")
+    return "\n".join(lines)
 
 
 def _settings_overrides(args: argparse.Namespace) -> dict[str, Any]:
