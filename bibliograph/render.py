@@ -1,6 +1,7 @@
 """Pure Markdown renderers for workflow result dictionaries."""
 
 from collections.abc import Iterable
+import re
 
 from .domain import citation_label
 
@@ -51,6 +52,8 @@ def _render_source_card(number: int, item: dict, *, include_claim: bool = False)
     ]
     if chunk.evidence_role:
         lines.insert(9, f"| **Evidence role** | {_table_cell(chunk.evidence_role)} |")
+    if item.get("evidence_status"):
+        lines.insert(9, f"| **Evidence assessment** | {_table_cell(item['evidence_status'])} |")
 
     if include_claim:
         lines.extend(
@@ -63,8 +66,13 @@ def _render_source_card(number: int, item: dict, *, include_claim: bool = False)
     lines.extend(
         [
             "",
-            "### Excerpt",
-            f"> {item['evidence']}",
+            "### Source context",
+            f"> {_highlight_matched_excerpt(item['evidence'], item.get('matched_excerpt'))}",
+        ]
+    )
+
+    lines.extend(
+        [
             "",
             "### Explanation",
             item["rationale"],
@@ -72,6 +80,22 @@ def _render_source_card(number: int, item: dict, *, include_claim: bool = False)
         ]
     )
     return lines
+
+
+def _highlight_matched_excerpt(context: str, matched_excerpt: str | None) -> str:
+    if not matched_excerpt:
+        return context
+    pieces = re.split(r"\s+", matched_excerpt.strip())
+    if not pieces or not pieces[0]:
+        return context
+    pattern = r"\s+".join(re.escape(piece) for piece in pieces)
+    match = re.search(pattern, context, flags=re.IGNORECASE)
+    if match is None:
+        return context
+    return (
+        f"{context[:match.start()]}⟦highlight⟧{match.group()}⟦/highlight⟧"
+        f"{context[match.end():]}"
+    )
 
 
 def _display_title(value: str) -> str:

@@ -62,6 +62,7 @@ def search(
             limit=limit,
             min_score=min_score,
             expand=llm_tools.get("expand"),
+            refine=llm_tools.get("refine"),
             rerank=llm_tools.get("rerank"),
             progress=report_stage if stages is not None else None,
             select_evidence=llm_tools.get("select_evidence"),

@@ -6,7 +6,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from inspect import signature
 
 from ..domain import Chunk, Claim, ScoredChunk
-from ..knowledge import QueryRequest
 from .llm_tasks import heuristic_rerank, template_rationale
 
 EmbedQueries = Callable[[Sequence[str]], list[list[float]]]
@@ -26,6 +25,7 @@ def _search_claim_with_backend(
     limit: int = 5,
     min_score: float = 0.0,
     expand: Expand | None = None,
+    refine: Callable[[str, Sequence[str]], list[str]] | None = None,
     rerank: Rerank | None = None,
     progress: ProgressUpdate | None = None,
     select_evidence: SelectEvidence | None = None,
@@ -34,113 +34,67 @@ def _search_claim_with_backend(
     top_only: bool = False,
     one_per_paper: bool = False,
     include_trace: bool = False,
+    max_refinements: int = 1,
 ) -> dict:
-    """Retrieve through the configured backend and retain Bibliograph's citation result contract."""
-    text = claim["text"].strip()
-    if not text:
-        raise ValueError("A claim is required")
-    alternatives: list[str] = []
-    if expand is not None:
-        if progress is not None:
-            progress("Plan query · generating alternatives")
-        alternatives = _run_expander(expand, text, progress)
-        if progress is not None:
-            progress(f"Plan query · {len(alternatives)} alternatives ready")
-    if progress is not None:
-        progress(f"Retrieve candidates · {1 + len(alternatives)} queries")
-    request = QueryRequest.from_alternatives(text, alternatives)
-    retrieve_request = getattr(backend, "retrieve_request", None)
-    if retrieve_request is not None:
-        engine_result = retrieve_request(
-            request,
-            limit=max(limit, 10),
-            include_trace=include_trace or progress is not None,
-        )
-        hits = list(engine_result.hits)
-        score_details = dict(engine_result.score_details)
-        retrieval_trace = engine_result.trace
-    else:
-        # Compatibility for injected legacy backends during the adapter migration.
-        hits, score_details = backend.retrieve(
-            text,
-            alternatives=alternatives,
-            limit=max(limit, 10),
-        )
-        retrieval_trace = None
-    hits = [hit for hit in hits if hit[1] >= min_score]
-    if progress is not None:
-        progress(_render_subtask_results(request, hits, retrieval_trace, score_details))
-    if rerank is not None:
-        if progress is not None:
-            progress("Reranking retrieval candidates")
-        hits = _run_reranker(rerank, text, hits, progress)
-    selected_hits = _limit_hits(hits, limit=limit, one_per_paper=one_per_paper)
-    result = {
-        "claim": claim,
-        "queries": (text, *alternatives),
-        "hits": selected_hits,
-        "score_details": score_details,
-        "retrieval_trace": retrieval_trace,
-    }
-    if enrich:
-        enrichment_hits = selected_hits[:1] if top_only else selected_hits
-        result["items"] = enrich_hits(
-            [{**result, "hits": enrichment_hits}],
-            context_for=lambda chunk: chunk.text,
-            select_evidence=select_evidence,
-            explain=explain,
-        )
-    else:
-        result["items"] = enrich_hits(
-            [result],
-            context_for=lambda chunk: chunk.text,
-            top_only=top_only,
-        )
-    return result
+    """Run bounded LangGraph retrieval, context assessment, and query refinement."""
+    from .evidence_workflow import run_evidence_workflow
+
+    return run_evidence_workflow(
+        claim,
+        backend=backend,
+        limit=limit,
+        min_score=min_score,
+        expand=expand,
+        refine=refine,
+        rerank=rerank,
+        select_evidence=select_evidence,
+        explain=explain,
+        progress=progress,
+        enrich=enrich,
+        top_only=top_only,
+        one_per_paper=one_per_paper,
+        max_refinements=max_refinements,
+    )
 
 
-def _render_subtask_results(request, hits, trace, score_details) -> str:
-    lines = ["Search subtask results:", f"  Query: {request.text}"]
-    if request.hypotheses:
-        lines.append(f"  Query plan: {len(request.hypotheses)} alternatives")
+def _render_subtask_results(request, hits, traces, *, query_count: int) -> str:
+    """Render one compact summary for a query batch, not one list per query."""
+    lines = ["Search subtask results:", f"  Claim: {request.text}"]
+    lines.append(f"  Search pass: {query_count} query variant(s)")
 
     if hits:
-        lines.append("  Evidence candidates:")
-        for chunk, score in hits[:5]:
+        lines.append(f"  Evidence candidates: {len(hits)} unique · top {min(3, len(hits))}")
+        for chunk, score in hits[:3]:
             paper = chunk.paper
             title = paper.title.strip() or paper.zotero_key
             if "_" in title:
                 title = title.replace("_", " ").title()
             location = f", p. {chunk.page}" if chunk.page is not None else ""
-            role = f" · {chunk.evidence_role}" if chunk.evidence_role else ""
-            components = score_details.get(chunk.chunk_id, {})
-            component_text = " · ".join(
-                f"{name} {float(components[name]):.2f}"
-                for name in ("vector", "lexical", "graph")
-                if name in components
-            )
-            suffix = f" ({component_text})" if component_text else ""
             excerpt = " ".join(chunk.text.split())
-            if len(excerpt) > 180:
-                excerpt = excerpt[:177].rsplit(" ", 1)[0] + "…"
-            lines.append(
-                f"    - {title}{location}{role} · relevance {float(score):.3f}{suffix}"
-            )
+            if len(excerpt) > 125:
+                excerpt = excerpt[:122].rsplit(" ", 1)[0] + "…"
+            lines.append(f"    - {title}{location} · relevance {float(score):.3f}")
             if excerpt:
                 lines.append(f"      “{excerpt}”")
     else:
         lines.append("  Evidence candidates: none")
 
-    if trace is not None:
-        seed_count = len(trace.metadata.get("seeds", ()))
-        path_count = len(trace.paths)
-        edge_count = len(trace.edges)
+    trace_list = traces if isinstance(traces, (list, tuple)) else [traces]
+    trace_list = [trace for trace in trace_list if trace is not None]
+    if trace_list:
+        seeds = {
+            str(seed.get("id", seed) if isinstance(seed, dict) else seed)
+            for trace in trace_list
+            for seed in trace.metadata.get("seeds", ())
+        }
+        path_count = sum(len(trace.paths) for trace in trace_list)
+        edge_count = sum(len(trace.edges) for trace in trace_list)
         if path_count:
             lines.append(f"  Retrieval context: graph expansion followed {path_count} paths")
         elif edge_count:
             lines.append(f"  Retrieval context: graph expansion used {edge_count} links")
-        elif seed_count:
-            lines.append(f"  Retrieval context: started from {seed_count} indexed passages")
+        elif seeds:
+            lines.append(f"  Retrieval context: started from {len(seeds)} indexed passages")
         else:
             lines.append("  Retrieval context: no graph expansion paths returned")
     else:

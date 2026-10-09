@@ -4,7 +4,7 @@
 
 Bibliograph finds evidence for claims in a local paper library and helps verify citation support. It indexes Zotero collections or local PDFs, then searches the index with hybrid vector, lexical, and graph retrieval. Search results include source details, an excerpt, and an explanation; optional LLM stages can expand queries, rerank candidates, select evidence, and write rationales.
 
-[Ikarus](https://github.com/sebastianjkern/ikarus) provides the SQLite-backed retrieval infrastructure. Bibliograph supplies the paper-oriented indexing and citation workflow, provider adapters, CLI, and result presentation.
+[Ikarus](https://github.com/sebastianjkern/ikarus) provides the SQLite-backed retrieval infrastructure. Bibliograph supplies the paper-oriented indexing and citation workflow, CLI, and result presentation.
 
 ![Bibliograph example](./image.png)
 
@@ -187,11 +187,10 @@ bibliograph/
   bootstrap.py    composition root and dependency lifetimes
   settings.py     TOML, environment, and CLI resolution
   domain.py       Paper and Chunk durable records
-  providers/      embedding and chat provider factories
   adapters/       Ikarus, Zotero, PDF, and acquisition adapters
   pipeline/       retrieval, LLM tasks, indexing, and draft parsing
   commands/       sync, PDF ingestion, search, check, and status workflows
   render.py       Markdown rendering
 ```
 
-Provider adapters are registered in `bibliograph/providers/registry.py`; command and pipeline code should not branch on provider names. Always verify retrieved evidence before inserting a citation into a manuscript.
+Provider runtimes are constructed through Ikarus's `adapters.providers.model_runtimes` registry; command and pipeline code should not branch on provider names. Always verify retrieved evidence before inserting a citation into a manuscript.

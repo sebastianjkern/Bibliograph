@@ -134,6 +134,7 @@ def test_main_dispatches_search_without_constructing_sync_dependencies(monkeypat
             "disabled_stages": ("rerank", "evidence"),
             "show_progress": False,
             "enrich": True,
+            "one_per_paper": False,
         },
     }
 
@@ -159,7 +160,6 @@ def test_legacy_check_explicitly_syncs_before_read_only_check(monkeypatch):
                 "collection": "Methods",
                 "rebuild": True,
                 "show_progress": False,
-                "force_reindex": False,
             },
         ),
         (

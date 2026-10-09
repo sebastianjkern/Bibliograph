@@ -130,6 +130,52 @@ def expand_query(
     return expanded
 
 
+def refine_queries(
+    claim: str,
+    excerpts: Sequence[str],
+    *,
+    complete: Complete,
+) -> list[str]:
+    """Use retrieved wording to propose a small set of claim-preserving queries."""
+    context = "\n\n".join(
+        f"[{index}] {' '.join(excerpt.split())[:1200]}"
+        for index, excerpt in enumerate(excerpts[:5], start=1)
+        if excerpt.strip()
+    )
+    if not context:
+        return []
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Propose at most four follow-up search queries for the original claim, "
+                "using terminology observed in the retrieved excerpts. Keep the original "
+                "claim's meaning and entities; excerpts are vocabulary sources, not proof. "
+                "Do not broaden the claim or introduce unsupported relations. Return JSON "
+                "only as {\"queries\": [\"...\"]}."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"ORIGINAL CLAIM:\n{claim}\n\nRETRIEVED EXCERPTS:\n{context}",
+        },
+    ]
+    payload = _json_object(_complete_json(complete, messages, {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["queries"],
+        "properties": {"queries": {"type": "array", "items": {"type": "string"}}},
+    }))
+    queries = payload.get("queries", [])
+    if not isinstance(queries, list):
+        return []
+    return [
+        " ".join(query.split()).strip()
+        for query in queries
+        if isinstance(query, str) and query.strip() and len(query) <= 500
+    ][:4]
+
+
 def _expansion_messages(claim: str, perspective: str, types: Sequence[str]) -> list[dict]:
     return [
         {
@@ -264,7 +310,8 @@ def _rerank_batch(
                     "report the relationship in the claim. Preserve the claim's population, "
                     "unit of analysis, geographic scale, outcome, and time period. Do not assume "
                     "a finding generalizes across populations or measurement units unless the "
-                    "passage establishes that link. A passage that only shares terminology, states the "
+                    "passage establishes that link. A passage that only shares terminology, "
+                    "states the "
                     "paper's objective, describes a method, or discusses previous studies "
                     "is neutral, "
                     "not supporting. Do not infer importance, causality, or results that are "
@@ -447,11 +494,16 @@ def explain(claim: str, evidence: str, *, complete: Complete) -> str:
             {
                 "role": "system",
                 "content": (
-                    "Assess whether retrieved evidence supports a draft passage. Return only the "
-                    "explanation text. Do not prefix the answer with labels like SUPPORT, "
-                    "RATIONALE, or ANSWER. Do not use bullets, numbering, or markdown. Keep it "
-                    "to one concise paragraph. Preserve the evidence's population, unit of "
-                    "analysis, geographic scale, and outcome. State any scope limitation plainly."
+                    "Explain only what the supplied evidence explicitly states about the draft "
+                    "claim. Every factual statement must be directly supported by the evidence; "
+                    "do not add background knowledge, infer mechanisms, causality, comparisons, "
+                    "or details that the evidence does not state. In particular, do not turn a "
+                    "descriptive association into a causal effect or infer relative effects from "
+                    "examples, figures, or labels. If the evidence does not establish part of "
+                    "the claim, say so plainly and distinguish that limitation from what it does "
+                    "establish. Preserve the stated population, unit of analysis, geographic "
+                    "scale, and outcome. Return only one concise paragraph, without labels, "
+                    "bullets, numbering, or markdown."
                 ),
             },
             {"role": "user", "content": f"DRAFT:\n{claim}\n\nEVIDENCE:\n{evidence}"},

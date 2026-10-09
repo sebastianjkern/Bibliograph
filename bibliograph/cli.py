@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +12,11 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from .bootstrap import run_check, run_ingest_pdfs, run_search, run_status, run_sync
 from .logging_utils import configure_logging, get_logger
-from .providers.registry import chat_names, embedding_names
+from adapters.providers.model_runtimes.registry import chat_names, embedding_names
 from .render import render_sync
 from .settings import load_settings
 
@@ -424,8 +426,19 @@ def _disabled_llm_stages(args: argparse.Namespace) -> tuple[str, ...]:
 
 
 def _emit(markdown: str, output: Path | None) -> None:
+    marker_pattern = re.compile(r"⟦highlight⟧(.*?)⟦/highlight⟧", re.DOTALL)
     if output is not None:
+        markdown = marker_pattern.sub(r"**\1**", markdown)
         output.write_text(markdown, encoding="utf-8")
         get_logger("cli").info("Wrote report: %s", output)
-    else:
-        Console().print(Markdown(markdown))
+        return
+
+    console = Console()
+    position = 0
+    for match in marker_pattern.finditer(markdown):
+        if match.start() > position:
+            console.print(Markdown(markdown[position : match.start()]), end="")
+        console.print(Text(match.group(1), style="bold black on yellow"), end="")
+        position = match.end()
+    if position < len(markdown):
+        console.print(Markdown(markdown[position:]), end="")

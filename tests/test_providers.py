@@ -3,7 +3,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from bibliograph.domain import Chunk, Paper, citation_label
-from bibliograph.providers import (
+from adapters.providers.model_runtimes import (
     ProviderError,
     build_chat,
     build_embedding,

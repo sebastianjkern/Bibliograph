@@ -4,6 +4,7 @@ from threading import Lock
 from time import sleep
 
 import pytest
+from adapters.providers.model_runtimes.registry import build_embedding
 
 from bibliograph import bootstrap
 from bibliograph.adapters.ikarus import IkarusBackend
@@ -13,7 +14,6 @@ from bibliograph.domain import Chunk, Paper
 from bibliograph.pipeline import llm_tasks
 from bibliograph.pipeline.indexing import INDEXING_FINGERPRINT, index_document
 from bibliograph.pipeline.retrieval import _limit_hits
-from bibliograph.providers.registry import build_embedding
 
 
 def _hash_settings(db: str) -> dict:
@@ -138,6 +138,7 @@ def test_one_fake_chat_runtime_serves_all_llm_tasks():
     paper = Paper("P1", "A paper")
     chunk = Chunk("P1:1:0", paper, "Exact supporting sentence.", page=1)
     hit = (chunk, 0.4)
+    explanation_prompts = []
 
     def complete(messages, *, json_mode=False):
         prompt = messages[0]["content"]
@@ -148,6 +149,7 @@ def test_one_fake_chat_runtime_serves_all_llm_tasks():
                 '{"supports_claim":true,"quote":"Exact supporting sentence.",'
                 '"rationale":"Direct support."}'
             )
+        explanation_prompts.append(messages)
         return "Direct support."
 
     assert llm_tasks.rerank("claim", [hit], complete=complete) == [(chunk, 0.9)]
@@ -158,6 +160,10 @@ def test_one_fake_chat_runtime_serves_all_llm_tasks():
         complete=complete,
     ) == ("Exact supporting sentence.", "Direct support.")
     assert llm_tasks.explain("claim", chunk.text, complete=complete) == "Direct support."
+    explanation_prompt = "\n".join(message["content"] for message in explanation_prompts[0])
+    assert "Every factual statement must be directly supported" in explanation_prompt
+    assert "do not turn a descriptive association into a causal effect" in explanation_prompt
+    assert "DRAFT:\nclaim\n\nEVIDENCE:\nExact supporting sentence." in explanation_prompt
 
 
 def test_rerank_scores_direct_entailment_above_topical_objective():
@@ -437,7 +443,7 @@ def test_llm_stage_model_overrides_are_passed_to_matching_chat_runtimes(monkeypa
 
     tools = bootstrap._llm_tools(settings)
 
-    assert set(tools) == {"expand", "rerank", "select_evidence", "explain"}
+    assert set(tools) == {"expand", "refine", "rerank", "select_evidence", "explain"}
     assert configured_models == ["shared-model", "expand-model", "evidence-model"]
 
 

@@ -8,7 +8,6 @@ from bibliograph.pipeline.retrieval import enrich_hits, retrieve_claims, search_
 from bibliograph.render import render_check, render_search
 
 
-
 def test_search_render_explains_empty_results_and_keeps_claim():
     rendered = render_search([], claim="Road quality improves market access.")
 
@@ -92,7 +91,7 @@ def test_shared_retrieval_pipeline_drives_search_and_check_rendering():
     assert "| **Rerank support** | 0.80 |" in report
     assert "| **DOI** | 10/example |" in report
     assert "| **Page** | 1 |" in report
-    assert "### Excerpt" in report
+    assert "### Source context" in report
     assert "### Explanation" in report
 
 
@@ -202,6 +201,8 @@ def test_only_top_ten_distinct_articles_are_enriched_after_reranking():
             enriched.append(hit[0].paper.zotero_key) or hit[0].text,
             "Direct support.",
         ),
+        limit=10,
+        one_per_paper=True,
     )
 
     assert len(result["hits"]) == 10
@@ -289,6 +290,137 @@ def test_explain_strips_label_prefixes_from_llm_output():
     assert content == "The evidence directly addresses the claim."
 
 
+def test_refine_queries_uses_excerpt_terms_without_replacing_original_claim():
+    from bibliograph.pipeline.llm_tasks import refine_queries
+
+    prompts = []
+
+    def complete(messages, *, json_mode=False, response_schema=None):
+        prompts.append((messages, json_mode, response_schema))
+        return '{"queries":["treatment effect on reported outcome"]}'
+
+    queries = refine_queries(
+        "Treatment changed an outcome.",
+        ["The study estimates a treatment effect for the measured outcome."],
+        complete=complete,
+    )
+
+    assert queries == ["treatment effect on reported outcome"]
+    assert prompts[0][1] is True
+    prompt = "\\n".join(message["content"] for message in prompts[0][0])
+    assert "Treatment changed an outcome." in prompt
+    assert "The study estimates a treatment effect" in prompt
+    assert "excerpts are vocabulary sources, not proof" in prompt
+
+
+def test_langgraph_search_refines_queries_from_retrieved_context():
+    from bibliograph.knowledge import RetrievalResult
+
+    paper = Paper("P1", "Contextual study")
+    initial = Chunk("P1:1:0", paper, "The relationship was estimated in the sample.")
+    followup = Chunk("P1:2:0", paper, "The treatment increased the measured outcome.")
+    requests = []
+    trace = RetrievalTrace(nodes=({"id": "P1:1:0", "kind": "chunk"},))
+
+    class Backend:
+        def retrieve_request(self, request, *, limit, include_trace):
+            requests.append((request, limit, include_trace))
+            chunk = initial if request.text == "Claim about treatment and outcome" else followup
+            return RetrievalResult(
+                hits=((chunk, 0.8),),
+                score_details={chunk.chunk_id: {"retrieval": 0.8}},
+                trace=trace,
+            )
+
+        def context_for(self, chunk):
+            return f"Adjacent context clarifies the terminology. {chunk.text}"
+
+    refinements = []
+    explanations = []
+
+    def explain(claim, evidence):
+        explanations.append((claim, evidence))
+        return "Explanation based on displayed context."
+
+    def refine(claim, excerpts):
+        refinements.append((claim, excerpts))
+        return ["treatment effect on measured outcome"]
+
+    def select(_claim, hit, context):
+        if hit[0] == followup:
+            return (
+                "The treatment increased the measured outcome.",
+                "The excerpt reports a finding.",
+            )
+        return None
+
+    result = search_claim(
+        {"text": "Claim about treatment and outcome", "citation_keys": ()},
+        backend=Backend(),
+        expand=lambda _claim: [],
+        refine=refine,
+        rerank=lambda _claim, hits: list(hits),
+        select_evidence=select,
+        explain=explain,
+        enrich=True,
+    )
+
+    assert [request.text for request, _limit, _trace in requests] == [
+        "Claim about treatment and outcome",
+        "treatment effect on measured outcome",
+    ]
+    assert all(limit == 20 and include_trace for _request, limit, include_trace in requests)
+    assert refinements[0][0] == "Claim about treatment and outcome"
+    assert "Adjacent context clarifies the terminology" in refinements[0][1][0]
+    assert result["refinement_rounds"] == 1
+    assert result["candidate_queries"][followup.chunk_id] == [
+        "treatment effect on measured outcome"
+    ]
+    supported_item = next(item for item in result["items"] if item["chunk"] == followup)
+    expected_context = (
+        "Adjacent context clarifies the terminology. "
+        "The treatment increased the measured outcome."
+    )
+    assert supported_item["evidence"] == expected_context
+    assert supported_item["matched_excerpt"] == "The treatment increased the measured outcome."
+    assert supported_item["rationale"] == "Explanation based on displayed context."
+    assert explanations == [("Claim about treatment and outcome", expected_context)]
+    assert supported_item["evidence_status"] == "supporting_excerpt_selected"
+    rendered_supported = render_search([supported_item])
+    assert (
+        "⟦highlight⟧The treatment increased the measured outcome.⟦/highlight⟧"
+        in rendered_supported
+    )
+    assert "### Matched excerpt" not in rendered_supported
+    unverified_item = next(item for item in result["items"] if item["chunk"] == initial)
+    assert unverified_item["evidence_status"] == "no_supporting_excerpt_selected"
+    assert "No exact supporting excerpt was verified" in unverified_item["rationale"]
+
+
+def test_langgraph_search_stops_refining_after_supported_evidence():
+    from bibliograph.knowledge import RetrievalResult
+
+    paper = Paper("P1", "Evidence paper")
+    chunk = Chunk("P1:1:0", paper, "The intervention increased the outcome.")
+
+    class Backend:
+        def retrieve_request(self, _request, *, limit, include_trace):
+            return RetrievalResult(hits=((chunk, 0.9),), score_details={})
+
+    refined = []
+    result = search_claim(
+        {"text": "Intervention increased the outcome", "citation_keys": ()},
+        backend=Backend(),
+        expand=lambda _claim: [],
+        refine=lambda *_args: refined.append(True) or ["more terms"],
+        select_evidence=lambda _claim, _hit, _context: (chunk.text, "Direct result."),
+    )
+
+    assert refined == []
+    assert result["refinement_rounds"] == 0
+    assert result["queries"] == ("Intervention increased the outcome",)
+
+
 def test_knowledge_backend_receives_neutral_query_and_returns_trace():
     paper = Paper("P1", "Road study")
     chunk = Chunk("P1:1:0", paper, "Road quality improves market access.")
@@ -320,22 +452,28 @@ def test_knowledge_backend_receives_neutral_query_and_returns_trace():
 
     request, limit, include_trace = requests[0]
     assert request.text == "Road quality affects market access."
-    assert [hypothesis.text for hypothesis in request.hypotheses] == [
-        "Transport infrastructure and trade"
+    assert all(not request.hypotheses for request, _limit, _trace in requests)
+    assert [request.text for request, _limit, _trace in requests] == [
+        "Road quality affects market access.",
+        "Transport infrastructure and trade",
     ]
-    assert limit == 10
+    assert limit == 20
     assert include_trace is True
-    assert result["retrieval_trace"] is trace
+    assert len(result["query_traces"]) == 2
+    assert result["retrieval_trace"][0]["trace"] is trace
     partial_results = next(
         message for message in progress_messages if message.startswith("Search subtask results:")
     )
     assert "\\n" not in partial_results
-    assert "Query plan: 1 alternatives" in partial_results
+    assert "Search pass: 2 query variant(s)" in partial_results
     assert "Alternative:" not in partial_results
     assert "Road study" in partial_results
     assert "relevance 0.800" in partial_results
     assert "Road quality improves market access." in partial_results
     assert "started from 1 indexed passages" in partial_results
+    assert sum(
+        message.startswith("Search subtask results:") for message in progress_messages
+    ) == 1
     assert "P1:1:0" not in partial_results
 
 
@@ -371,8 +509,8 @@ def test_backend_retrieval_search_claim_accepts_backend_keyword():
     class Backend:
         def retrieve(self, query, *, alternatives, limit):
             assert query == "Road quality affects market access."
-            assert alternatives == []
-            assert limit == 10
+            assert alternatives == ()
+            assert limit == 20
             return [(chunk, 0.8)], {chunk.chunk_id: {"retrieval": 0.8}}
 
     result = search_claim(

@@ -12,6 +12,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from adapters.providers.model_runtimes.registry import build_chat, build_embedding
+
 from .adapters.acquisition import (
     cache_strategy,
     download_remote_pdf,
@@ -40,11 +42,11 @@ from .pipeline.llm_tasks import (
     explain,
     heuristic_expand,
     heuristic_rerank,
+    refine_queries,
     rerank,
     select_evidence,
     template_rationale,
 )
-from .providers.registry import build_chat, build_embedding
 from .settings import Settings
 
 logger = get_logger("bootstrap")
@@ -279,7 +281,16 @@ def _llm_tools(
     model_overrides = llm_settings.get("models", {})
     chats: dict[str, Any] = {}
 
-    def stage_tool(stage: str, label: str, factory: Callable) -> Callable:
+    def stage_tool(
+        stage: str, label: str, factory: Callable, fallback: Callable | None = None
+    ) -> Callable:
+        fallback_keys = {
+            "expand": "expand",
+            "rerank": "rerank",
+            "evidence": "select_evidence",
+            "rationale": "explain",
+        }
+        fallback_tool = fallback or fallbacks.get(fallback_keys[stage])
         model = model_overrides.get(stage, llm_settings["model"])
         try:
             if model not in chats:
@@ -291,7 +302,7 @@ def _llm_tools(
             if mode == "required":
                 raise
             logger.warning("LLM %s initialization unavailable; using fallback: %s", label, error)
-            return fallbacks[stage]
+            return fallback_tool
         if mode == "required":
             return primary
 
@@ -301,7 +312,7 @@ def _llm_tools(
                 return primary(*args, **kwargs)
             except Exception as error:
                 logger.warning("LLM %s unavailable; using fallback: %s", label, error)
-                return fallbacks[stage](*args, **kwargs)
+                return fallback_tool(*args, **kwargs)
 
         return run
 
@@ -317,6 +328,14 @@ def _llm_tools(
             "expand", "query expansion", lambda complete: lambda claim, progress=None: expand_query(
                 claim, complete=complete, progress=progress
             )
+        )
+        tools["refine"] = stage_tool(
+            "expand",
+            "query refinement",
+            lambda complete: lambda claim, excerpts: refine_queries(
+                claim, excerpts, complete=complete
+            ),
+            fallback=lambda _claim, _excerpts: [],
         )
     if "evidence" in stages:
         tools["select_evidence"] = stage_tool(

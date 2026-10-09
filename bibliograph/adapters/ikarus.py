@@ -443,6 +443,45 @@ class IkarusBackend:
                 "WHERE singleton=1"
             )
 
+    def context_for(self, chunk: Chunk, *, window: int = 1, max_words: int = 900) -> str:
+        """Return a chunk with nearby same-section passages as explicit context."""
+        self._require_open()
+        if window < 0 or max_words < 1:
+            raise ValueError("window must be non-negative and max_words must be positive")
+        row = self.connection.execute(
+            "SELECT document_id, metadata FROM graph_nodes WHERE identifier=? AND kind='chunk'",
+            (chunk.chunk_id,),
+        ).fetchone()
+        if row is None:
+            return chunk.text
+        document_id, raw_metadata = row
+        metadata = json.loads(raw_metadata) if isinstance(raw_metadata, str) else raw_metadata
+        metadata = metadata if isinstance(metadata, dict) else {}
+        ordinal = int(metadata.get("ordinal", chunk.ordinal))
+        section = metadata.get("section", chunk.section)
+        rows = self.connection.execute(
+            "SELECT identifier, content, metadata FROM graph_nodes "
+            "WHERE document_id=? AND kind='chunk'",
+            (document_id,),
+        ).fetchall()
+        nearby = []
+        for _identifier, content, raw in rows:
+            details = json.loads(raw) if isinstance(raw, str) else raw
+            details = details if isinstance(details, dict) else {}
+            neighbor_ordinal = int(details.get("ordinal", -1))
+            neighbor_section = details.get("section")
+            if abs(neighbor_ordinal - ordinal) > window:
+                continue
+            if section and neighbor_section != section:
+                continue
+            nearby.append((neighbor_ordinal, str(content or "")))
+        nearby.sort(key=lambda item: item[0])
+        text = "\n\n".join(value for _ordinal, value in nearby if value.strip())
+        words = text.split()
+        if len(words) <= max_words:
+            return text or chunk.text
+        return " ".join(words[:max_words])
+
     def stats(self) -> dict[str, Any]:
         self._require_open()
         count = lambda sql: int(self.connection.execute(sql).fetchone()[0])

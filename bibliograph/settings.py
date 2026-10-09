@@ -14,7 +14,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from .providers.registry import chat_names, embedding_names, resolve_name
+from adapters.providers.model_runtimes.registry import chat_names, embedding_names, resolve_name
 
 type Settings = dict[str, Any]
 
