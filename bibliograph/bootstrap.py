@@ -118,6 +118,7 @@ def run_search(
     disabled_stages: Iterable[str] = (),
     show_progress: bool = True,
     enrich: bool = True,
+    one_per_paper: bool = False,
 ) -> dict:
     embedding = build_embedding(settings)
     with IkarusBackend(settings["db"], mode="read", embedding=embedding) as store:
@@ -133,6 +134,7 @@ def run_search(
             min_score=min_score,
             show_progress=show_progress,
             enrich=enrich,
+            one_per_paper=one_per_paper,
         )
 
 

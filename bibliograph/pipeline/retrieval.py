@@ -32,6 +32,7 @@ def _search_claim_with_backend(
     explain: Explain | None = None,
     enrich: bool = True,
     top_only: bool = False,
+    one_per_paper: bool = False,
     include_trace: bool = False,
 ) -> dict:
     """Retrieve through the configured backend and retain Bibliograph's citation result contract."""
@@ -74,7 +75,7 @@ def _search_claim_with_backend(
         if progress is not None:
             progress("Reranking retrieval candidates")
         hits = _run_reranker(rerank, text, hits, progress)
-    selected_hits = _top_article_hits(hits, limit=10)
+    selected_hits = _limit_hits(hits, limit=10, one_per_paper=one_per_paper)
     result = {
         "claim": claim,
         "queries": (text, *alternatives),
@@ -137,6 +138,7 @@ def _search_claim_with_explicit_search(
     explain: Explain | None = None,
     enrich: bool = True,
     top_only: bool = False,
+    one_per_paper: bool = False,
 ) -> dict:
     text = claim["text"].strip()
     if not text:
@@ -182,7 +184,7 @@ def _search_claim_with_explicit_search(
         progress("Reranking candidates")
     reranker = rerank or heuristic_rerank
     ordered_hits = _run_reranker(reranker, text, hits, progress)
-    selected_hits = _top_article_hits(ordered_hits, limit=10)
+    selected_hits = _limit_hits(ordered_hits, limit=10, one_per_paper=one_per_paper)
     result = {
         "claim": claim,
         "queries": tuple(variants),
@@ -237,15 +239,17 @@ def _search_claim_with_explicit_search(
     return result
 
 
-def _top_article_hits(hits: Sequence[ScoredChunk], *, limit: int) -> list[ScoredChunk]:
-    """Keep the highest-scoring passage from each article, globally ranked."""
+def _limit_hits(
+    hits: Sequence[ScoredChunk], *, limit: int, one_per_paper: bool
+) -> list[ScoredChunk]:
+    """Rank passages and optionally keep only the strongest passage per paper."""
+    ranked = sorted(hits, key=lambda hit: hit[1], reverse=True)
+    if not one_per_paper:
+        return ranked[:limit]
     by_article: dict[str, ScoredChunk] = {}
-    for hit in hits:
-        article_key = hit[0].paper.zotero_key
-        previous = by_article.get(article_key)
-        if previous is None or hit[1] > previous[1]:
-            by_article[article_key] = hit
-    return sorted(by_article.values(), key=lambda hit: hit[1], reverse=True)[:limit]
+    for hit in ranked:
+        by_article.setdefault(hit[0].paper.zotero_key, hit)
+    return list(by_article.values())[:limit]
 
 
 def _run_expander(

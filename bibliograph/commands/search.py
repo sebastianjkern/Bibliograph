@@ -27,6 +27,7 @@ def search(
     min_score: float = 0.0,
     show_progress: bool = True,
     enrich: bool = True,
+    one_per_paper: bool = False,
 ) -> dict[str, Any]:
     progress_cm = _progress_context(show_progress)
     with progress_cm as progress:
@@ -66,6 +67,7 @@ def search(
             select_evidence=llm_tools.get("select_evidence"),
             explain=llm_tools.get("explain"),
             enrich=enrich,
+            one_per_paper=one_per_paper,
         )
         items = result["items"]
         if task_id is not None and stages is not None and progress is not None:

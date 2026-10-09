@@ -79,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     search = subparsers.add_parser("search", help="Search indexed sources for one claim")
     search.add_argument("claim")
-    _add_query_options(search)
+    _add_query_options(search, one_per_paper=True)
 
     check = subparsers.add_parser(
         "check",
@@ -111,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Deprecated; use search",
     )
     legacy_search.add_argument("claim")
-    _add_query_options(legacy_search)
+    _add_query_options(legacy_search, one_per_paper=True)
     legacy_search.set_defaults(command="legacy-search")
 
     legacy_suggest = subparsers.add_parser("suggest", help="Deprecated; use check")
@@ -153,7 +153,9 @@ def _add_legacy_rebuild_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_query_options(parser: argparse.ArgumentParser) -> None:
+def _add_query_options(
+    parser: argparse.ArgumentParser, *, one_per_paper: bool = False
+) -> None:
     parser.add_argument("--limit", type=int, default=5)
     parser.add_argument("--min-score", type=float, default=0.0)
     parser.add_argument(
@@ -176,6 +178,12 @@ def _add_query_options(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Disable LLM evidence selection and rationale generation",
     )
+    if one_per_paper:
+        parser.add_argument(
+            "--one-per-paper",
+            action="store_true",
+            help="Keep at most one excerpt from each paper",
+        )
     parser.add_argument("--output", type=Path)
 
 
@@ -233,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
                 disabled_stages=_disabled_llm_stages(args),
                 show_progress=not args.quiet,
                 enrich=not args.no_enrichment,
+                one_per_paper=args.one_per_paper,
             )
             _emit(result["markdown"], args.output)
             return 0

@@ -12,6 +12,7 @@ from bibliograph.commands.status import status
 from bibliograph.domain import Chunk, Paper
 from bibliograph.pipeline import llm_tasks
 from bibliograph.pipeline.indexing import INDEXING_FINGERPRINT, index_document
+from bibliograph.pipeline.retrieval import _limit_hits
 from bibliograph.providers.registry import build_embedding
 
 
@@ -395,6 +396,26 @@ def test_optional_llm_initialization_failure_uses_configured_fallbacks(monkeypat
     assert tools["explain"]("claim", hit[0].text) == (
         "Retrieved evidence overlaps with the draft passage; verify the source before citing."
     )
+
+
+def test_multiple_excerpts_per_paper_are_default_and_can_be_limited():
+    paper_a = Paper("P1", "Paper A")
+    paper_b = Paper("P2", "Paper B")
+    hits = [
+        (Chunk("P1:1:0", paper_a, "First excerpt"), 0.9),
+        (Chunk("P1:2:0", paper_a, "Second excerpt"), 0.8),
+        (Chunk("P2:1:0", paper_b, "Other paper"), 0.7),
+    ]
+
+    assert [hit[0].chunk_id for hit in _limit_hits(hits, limit=10, one_per_paper=False)] == [
+        "P1:1:0",
+        "P1:2:0",
+        "P2:1:0",
+    ]
+    assert [hit[0].chunk_id for hit in _limit_hits(hits, limit=10, one_per_paper=True)] == [
+        "P1:1:0",
+        "P2:1:0",
+    ]
 
 
 def test_llm_stage_model_overrides_are_passed_to_matching_chat_runtimes(monkeypatch):
