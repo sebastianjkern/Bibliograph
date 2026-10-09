@@ -36,7 +36,7 @@ class EvidenceState(TypedDict):
     query_traces: list[dict[str, object]]
     contexts: dict[str, str]
     ranked_hits: list[ScoredChunk]
-    assessment_results: dict[str, tuple[str, str] | None]
+    assessment_results: dict[str, dict[str, object] | None]
     result: dict
 
 
@@ -166,18 +166,21 @@ def build_evidence_workflow(
         if select_evidence is not None:
             for hit in ranked[: max(5, limit * 2)]:
                 chunk, _score = hit
-                selected = select_evidence(
-                    state["claim"]["text"],
-                    hit,
-                    state["contexts"].get(chunk.chunk_id, chunk.text),
-                )
-                assessment_results[chunk.chunk_id] = selected
-        supported_count = sum(value is not None for value in assessment_results.values())
-        report(f"Assessed evidence · {supported_count} supporting excerpts")
+                context = state["contexts"].get(chunk.chunk_id, chunk.text)
+                selected = select_evidence(state["claim"]["text"], hit, context)
+                assessment_results[chunk.chunk_id] = _normalise_assessment(selected, context)
+        assessed_count = sum(
+            value is not None and value.get("relation") in {"supports", "contradicts", "mixed"}
+            for value in assessment_results.values()
+        )
+        report(f"Assessed evidence · {assessed_count} related passages")
         return {"ranked_hits": ranked, "assessment_results": assessment_results}
 
     def route_after_assessment(state: EvidenceState) -> str:
-        if any(value is not None for value in state["assessment_results"].values()):
+        if any(
+            value is not None and value.get("relation") != "insufficient"
+            for value in state["assessment_results"].values()
+        ):
             return "finish"
         if refine is None:
             return "finish"
@@ -216,6 +219,21 @@ def build_evidence_workflow(
 
     def finish(state: EvidenceState) -> dict:
         ranked = state.get("ranked_hits", [])
+        relation_priority = {"supports": 0, "contradicts": 0, "mixed": 1, "insufficient": 2}
+        ranked = sorted(
+            ranked,
+            key=lambda hit: (
+                relation_priority.get(
+                    str(
+                        (state["assessment_results"].get(hit[0].chunk_id) or {}).get(
+                            "relation", "insufficient"
+                        )
+                    ),
+                    4,
+                ),
+                -hit[1],
+            ),
+        )
         selected_hits = _limit_hits(ranked, limit=limit, one_per_paper=one_per_paper)
         base = {
             "claim": state["claim"],
@@ -241,21 +259,34 @@ def build_evidence_workflow(
             if identifier in state["assessment_results"]:
                 assessment = state["assessment_results"][identifier]
                 item["evidence"] = contexts[identifier]
-                if assessment is None:
-                    item["evidence_status"] = "no_supporting_excerpt_selected"
-                    item["matched_excerpt"] = None
-                    item["rationale"] = (
-                        "No exact supporting excerpt was verified within this context."
-                    )
-                else:
-                    matched_excerpt, _selection_rationale = assessment
-                    item["matched_excerpt"] = matched_excerpt
-                    item["evidence_status"] = "supporting_excerpt_selected"
-                    item["rationale"] = (
-                        explain(state["claim"]["text"], item["evidence"])
-                        if explain is not None
-                        else "The displayed context contains the verified supporting excerpt."
-                    )
+                relation = (
+                    str(assessment.get("relation", "insufficient"))
+                    if assessment
+                    else "insufficient"
+                )
+                item["evidence_relation"] = relation
+                item["evidence_status"] = relation
+                item["matched_excerpt"] = (
+                    assessment.get("matched_quote") or None if assessment else None
+                )
+                item["assessment_reason"] = (
+                    assessment.get("reason", "") if assessment else ""
+                )
+                item["evidence_scope"] = (
+                    assessment.get("scope", {}) if assessment else {}
+                )
+                item["rationale"] = {
+                    "supports": "The source passage supports the claim within its stated scope.",
+                    "contradicts": (
+                        "The source passage contradicts the claim within its stated scope."
+                    ),
+                    "mixed": (
+                        "The source passage contains both supporting and contradicting evidence."
+                    ),
+                    "insufficient": (
+                        "The passage does not establish a supporting or contradicting relation."
+                    ),
+                }[relation]
             elif select_evidence is not None:
                 item["evidence_status"] = "not_assessed"
         traces = state["query_traces"]
@@ -334,6 +365,46 @@ def run_evidence_workflow(
     )
     initial_state = cast(EvidenceState, {"claim": claim})
     return graph.invoke(initial_state)["result"]
+
+
+def _normalise_assessment(selection, context: str) -> dict[str, object]:
+    if selection is None:
+        return {
+            "relation": "insufficient",
+            "matched_quote": "",
+            "reason": "",
+            "scope": {},
+        }
+    if isinstance(selection, tuple):
+        quote, reason = selection
+        selection = {
+            "relation": "supports",
+            "matched_quote": quote,
+            "reason": reason,
+        }
+    if not isinstance(selection, dict):
+        return {
+            "relation": "insufficient",
+            "matched_quote": "",
+            "reason": "",
+            "scope": {},
+        }
+    relation = str(selection.get("relation", "insufficient"))
+    quote = " ".join(str(selection.get("matched_quote", "")).split())
+    normalized_context = " ".join(context.split())
+    if relation not in {"supports", "contradicts", "mixed"}:
+        relation = "insufficient"
+        quote = ""
+    elif not quote or quote not in normalized_context:
+        relation = "insufficient"
+        quote = ""
+    raw_scope = selection.get("scope", {})
+    return {
+        "relation": relation,
+        "matched_quote": quote,
+        "reason": str(selection.get("reason", "")),
+        "scope": raw_scope if isinstance(raw_scope, dict) else {},
+    }
 
 
 def _unique_queries(claim: str, proposed: Sequence[str], *, limit: int) -> list[str]:

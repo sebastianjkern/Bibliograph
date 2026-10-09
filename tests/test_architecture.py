@@ -144,10 +144,11 @@ def test_one_fake_chat_runtime_serves_all_llm_tasks():
         prompt = messages[0]["content"]
         if "Rerank" in prompt:
             return '{"items":[{"candidate":0,"support":0.9}]}'
-        if "Select exact" in prompt:
+        if "Assess the relation" in prompt:
             return (
-                '{"supports_claim":true,"quote":"Exact supporting sentence.",'
-                '"rationale":"Direct support."}'
+                '{"relation":"supports","quote":"Exact supporting sentence.",'
+                '"reason":"Direct support.","scope":{"population":"sample",'
+                '"unit":"market","outcome":"result","geography":"", "time":""}}'
             )
         explanation_prompts.append(messages)
         return "Direct support."
@@ -158,7 +159,18 @@ def test_one_fake_chat_runtime_serves_all_llm_tasks():
         hit,
         "Before. Exact supporting sentence. After.",
         complete=complete,
-    ) == ("Exact supporting sentence.", "Direct support.")
+    ) == {
+        "relation": "supports",
+        "matched_quote": "Exact supporting sentence.",
+        "reason": "Direct support.",
+        "scope": {
+            "population": "sample",
+            "unit": "market",
+            "outcome": "result",
+            "geography": "",
+            "time": "",
+        },
+    }
     assert llm_tasks.explain("claim", chunk.text, complete=complete) == "Direct support."
     explanation_prompt = "\n".join(message["content"] for message in explanation_prompts[0])
     assert "Every factual statement must be directly supported" in explanation_prompt
@@ -256,26 +268,59 @@ def test_rerank_calculates_boolean_subscores_without_llm_numeric_score():
     assert '"support"' not in seen_prompt[0]
 
 
+def test_select_evidence_returns_explicit_contradicting_relation_and_validates_quotes():
+    paper = Paper("P1", "A paper")
+    chunk = Chunk("P1:1:0", paper, "The intervention had no effect on the measured outcome.")
+
+    def complete(_messages, *, json_mode=False):
+        return (
+            '{"relation":"contradicts","quote":"The intervention had no effect '
+            'on the measured outcome.","reason":"The reported direction conflicts.",'
+            '"scope":{"population":"","unit":"","outcome":"measured outcome",'
+            '"geography":"","time":""}}'
+        )
+
+    result = llm_tasks.select_evidence(
+        "The intervention increased the measured outcome.",
+        (chunk, 0.8),
+        chunk.text,
+        complete=complete,
+    )
+
+    assert result == {
+        "relation": "contradicts",
+        "matched_quote": chunk.text,
+        "reason": "The reported direction conflicts.",
+        "scope": {
+            "population": "",
+            "unit": "",
+            "outcome": "measured outcome",
+            "geography": "",
+            "time": "",
+        },
+    }
+
+
 def test_select_evidence_rejects_publisher_address_quotes():
     paper = Paper("P1", "A paper", ("Author",), "2010")
     chunk = Chunk("P1:1:0", paper, "Publisher information.")
 
     def complete(_messages, *, json_mode=False):
         return (
-            '{"supports_claim":true,"quote":"Published by Blackwell Publishing Ltd, '
-            '9600 Garsington Road, Oxford OX4 2DQ, UK.",'
-            '"rationale":"Direct support."}'
+            '{"relation":"supports","quote":"Published by Blackwell Publishing Ltd, '
+            '9600 Garsington Road, Oxford OX4 2DQ, UK.","reason":"Direct support.",'
+            '"scope":{"population":"","unit":"","outcome":"","geography":"",'
+            '"time":""}}'
         )
 
-    assert (
-        llm_tasks.select_evidence(
-            "Road infrastructure affects trade.",
-            (chunk, 0.05),
-            "Published by Blackwell Publishing Ltd, 9600 Garsington Road, Oxford OX4 2DQ, UK.",
-            complete=complete,
-        )
-        is None
+    assessment = llm_tasks.select_evidence(
+        "Road infrastructure affects trade.",
+        (chunk, 0.05),
+        "Published by Blackwell Publishing Ltd, 9600 Garsington Road, Oxford OX4 2DQ, UK.",
+        complete=complete,
     )
+    assert assessment["relation"] == "insufficient"
+    assert assessment["matched_quote"] == ""
 
 
 def test_rerank_chunks_all_candidates_into_prompts_of_at_most_ten():

@@ -97,6 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
     search = subparsers.add_parser("search", help="Search indexed sources for one claim")
     search.add_argument("claim")
     _add_query_options(search, one_per_paper=True)
+    search.add_argument("--verbose", action="store_true", help="Show all retrieved passages")
 
     check = subparsers.add_parser(
         "check",
@@ -129,6 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     legacy_search.add_argument("claim")
     _add_query_options(legacy_search, one_per_paper=True)
+    legacy_search.add_argument("--verbose", action="store_true", help=argparse.SUPPRESS)
     legacy_search.set_defaults(command="legacy-search")
 
     legacy_suggest = subparsers.add_parser("suggest", help="Deprecated; use check")
@@ -262,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
                 show_progress=not args.quiet,
                 enrich=not args.no_enrichment,
                 one_per_paper=args.one_per_paper,
+                verbose=args.verbose,
             )
             _emit(result["markdown"], args.output)
             return 0

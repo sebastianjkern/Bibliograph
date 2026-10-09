@@ -1,24 +1,44 @@
 """Pure Markdown renderers for workflow result dictionaries."""
 
-from collections.abc import Iterable
 import re
+from collections.abc import Iterable
 
 from .domain import citation_label
 
 
-def render_search(items: Iterable[dict], *, claim: str | None = None) -> str:
+def render_search(
+    items: Iterable[dict], *, claim: str | None = None, verbose: bool = False
+) -> str:
     items = _sorted_items(items)
     claim = items[0]["claim"]["text"] if items else (claim or "")
+    assessed = [
+        item
+        for item in items
+        if item.get("evidence_relation") in {"supports", "contradicts", "mixed"}
+    ]
+    shown = items if verbose else assessed[:3]
     lines = ["# Local sources", "", f"> Claim: {claim}", ""]
-    if not items:
+    if not shown:
         lines.extend(
             [
-                "No matching evidence was found in the indexed PDFs.",
-                "Try a broader claim or check that the PDFs have been indexed.",
+                "No assessed supporting or contradicting evidence was found.",
+                "Retrieved passages were not sufficient to verify a relation to the claim.",
             ]
         )
-    for index, item in enumerate(items, start=1):
+    for index, item in enumerate(shown, start=1):
         lines.extend(_render_source_card(index, item))
+    if not verbose and len(assessed) > len(shown):
+        lines.extend(
+            [
+                f"Showing {len(shown)} of {len(assessed)} assessed passages. "
+                "Use --verbose to see all.",
+                "",
+            ]
+        )
+    if not verbose and items and not assessed:
+        lines.extend(
+            [f"{len(items)} retrieved passage(s) were not assessed as evidence.", ""]
+        )
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -44,9 +64,9 @@ def _render_source_card(number: int, item: dict, *, include_claim: bool = False)
         "| Detail | Value |",
         "| :--- | :--- |",
         f"| **Title** | {_table_cell(display_title)} |",
+        f"| **Retrieval relevance** | {item.get('retrieval_score', item['score']):.2f} |",
         f"| **Vector similarity** | {item.get('vector_score', item['score']):.2f} |",
         f"| **Lexical closeness** | {item.get('lexical_score', 0.0):.2f} |",
-        f"| **Rerank support** | {item.get('rerank_score', item['score']):.2f} |",
         f"| **DOI** | {_table_cell(paper.doi or 'unknown')} |",
         f"| **Page** | {chunk.page or 'unknown'} |",
     ]
@@ -66,19 +86,36 @@ def _render_source_card(number: int, item: dict, *, include_claim: bool = False)
     lines.extend(
         [
             "",
-            "### Source context",
-            f"> {_highlight_matched_excerpt(item['evidence'], item.get('matched_excerpt'))}",
+            f"### Source context · {chunk.section or 'section unknown'}",
+            _highlight_matched_excerpt(item['evidence'], item.get('matched_excerpt')),
         ]
     )
 
-    lines.extend(
-        [
-            "",
-            "### Explanation",
-            item["rationale"],
-            "",
-        ]
-    )
+    if item.get("evidence_relation"):
+        lines.extend(
+            [
+                "",
+                f"**Assessment:** {item['evidence_relation']} — {item['rationale']}",
+            ]
+        )
+        scope = item.get("evidence_scope", {})
+        if isinstance(scope, dict):
+            stated_scope = [
+                f"{label}: {_table_cell(str(scope[key]))}"
+                for key, label in (
+                    ("population", "Population"),
+                    ("unit", "Unit"),
+                    ("outcome", "Outcome"),
+                    ("geography", "Geography"),
+                    ("time", "Time"),
+                )
+                if scope.get(key)
+            ]
+            if stated_scope:
+                lines.extend(["", "**Stated scope:** " + "; ".join(stated_scope)])
+        lines.append("")
+    elif item.get("rationale"):
+        lines.extend(["", f"**Assessment:** {item['rationale']}", ""])
     return lines
 
 
@@ -110,7 +147,15 @@ def _table_cell(value: str) -> str:
 
 def _sorted_items(items: Iterable[dict]) -> list[dict]:
     enumerated = list(enumerate(items))
-    ordered = sorted(enumerated, key=lambda pair: (-pair[1]["score"], pair[0]))
+    relation_order = {"supports": 0, "contradicts": 0, "mixed": 1, "insufficient": 2}
+    ordered = sorted(
+        enumerated,
+        key=lambda pair: (
+            relation_order.get(pair[1].get("evidence_relation") or "unassessed", 4),
+            -pair[1]["score"],
+            pair[0],
+        ),
+    )
     return [item for _index, item in ordered]
 
 

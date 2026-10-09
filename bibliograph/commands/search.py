@@ -28,6 +28,7 @@ def search(
     show_progress: bool = True,
     enrich: bool = True,
     one_per_paper: bool = False,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     progress_cm = _progress_context(show_progress)
     with progress_cm as progress:
@@ -77,7 +78,7 @@ def search(
     return {
         "result": result,
         "items": items,
-        "markdown": render_search(items, claim=claim),
+        "markdown": render_search(items, claim=claim, verbose=verbose),
     }
 
 

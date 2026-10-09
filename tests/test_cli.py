@@ -67,6 +67,7 @@ def test_cli_keeps_read_workflow_shims_for_one_release():
     )
     assert legacy_search.no_rerank is True
     assert legacy_search.no_evidence_extraction is True
+    assert parser.parse_args(["search", "claim", "--verbose"]).verbose is True
     no_enrichment = parser.parse_args(["search", "claim", "--no-enrichment"])
     assert no_enrichment.no_enrichment is True
     assert _disabled_llm_stages(no_enrichment) == ("evidence", "rationale")
@@ -135,6 +136,7 @@ def test_main_dispatches_search_without_constructing_sync_dependencies(monkeypat
             "show_progress": False,
             "enrich": True,
             "one_per_paper": False,
+            "verbose": False,
         },
     }
 

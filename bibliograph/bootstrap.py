@@ -148,6 +148,7 @@ def run_search(
     show_progress: bool = True,
     enrich: bool = True,
     one_per_paper: bool = False,
+    verbose: bool = False,
 ) -> dict:
     embedding = build_embedding(settings)
     with IkarusBackend(
@@ -169,6 +170,7 @@ def run_search(
             show_progress=show_progress,
             enrich=enrich,
             one_per_paper=one_per_paper,
+            verbose=verbose,
         )
 
 

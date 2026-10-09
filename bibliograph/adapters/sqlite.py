@@ -23,6 +23,7 @@ from uuid import uuid4
 import sqlite_vec
 
 from ..domain import Chunk, Paper, RetrievalScore, ScoredChunk
+from .context import join_chunk_context
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -475,7 +476,7 @@ class SQLiteStore:
             )
         return sorted(scored, key=lambda hit: hit[1], reverse=True)[:limit]
 
-    def context_for(self, chunk: Chunk, *, window: int = 1, max_words: int = 600) -> str:
+    def context_for(self, chunk: Chunk, *, window: int = 1, max_words: int = 360) -> str:
         """Return nearby chunks from the same indexed document."""
         self._require_v2()
         if window < 0 or max_words <= 0:
@@ -486,13 +487,17 @@ class SQLiteStore:
         if row is None:
             return ""
         rows = self.connection.execute(
-            """SELECT text FROM chunks
+            """SELECT ordinal, text FROM chunks
             WHERE document_id = ? AND ordinal BETWEEN ? AND ?
             ORDER BY ordinal""",
             (row["document_id"], row["ordinal"] - window, row["ordinal"] + window),
         ).fetchall()
-        words = " ".join(item["text"] for item in rows).split()
-        return " ".join(words[:max_words])
+        context = join_chunk_context(
+            [(item["ordinal"], item["text"]) for item in rows],
+            center_ordinal=row["ordinal"],
+            max_words=max_words,
+        )
+        return context or chunk.text
 
     def _initialize_schema(self) -> None:
         with self.connection:

@@ -14,7 +14,9 @@ ContextFor = Callable[[Chunk], str]
 Rerank = Callable[[str, Sequence[ScoredChunk]], list[ScoredChunk]]
 Expand = Callable[[str], list[str]]
 ProgressUpdate = Callable[[str], None]
-SelectEvidence = Callable[[str, ScoredChunk, str], tuple[str, str] | None]
+SelectEvidence = Callable[
+    [str, ScoredChunk, str], dict[str, str] | tuple[str, str] | None
+]
 Explain = Callable[[str, str], str]
 
 
@@ -337,9 +339,27 @@ def enrich_hits(
             context = context_for(chunk)
             evidence = _best_excerpt(claim["text"], context or chunk.text)
             selected_rationale = ""
+            assessment: dict[str, str] | None = None
             if select_evidence is not None:
                 selection = select_evidence(claim["text"], hit, context or chunk.text)
-                if selection is not None:
+                if isinstance(selection, dict):
+                    assessment = selection
+                    matched_quote = selection.get("matched_quote", "")
+                    if (
+                        selection.get("relation") != "insufficient"
+                        and matched_quote
+                        and _validated_excerpt(
+                            matched_quote, context or chunk.text, fallback=""
+                        ) == " ".join(matched_quote.split()).strip()
+                    ):
+                        evidence = context or chunk.text
+                    else:
+                        assessment = {
+                            **selection,
+                            "relation": "insufficient",
+                            "matched_quote": "",
+                        }
+                elif selection is not None:
                     selected_evidence, selected_rationale = selection
                     validated = _validated_excerpt(
                         selected_evidence,
@@ -348,9 +368,19 @@ def enrich_hits(
                     )
                     if validated != " ".join(selected_evidence.split()).strip():
                         selected_rationale = ""
+                    else:
+                        assessment = {
+                            "relation": "supports",
+                            "matched_quote": validated,
+                            "reason": selected_rationale,
+                        }
                     evidence = validated or evidence
             rationale_function = explain or template_rationale
-            rationale = selected_rationale or rationale_function(claim["text"], evidence)
+            rationale = (
+                _assessment_summary(assessment)
+                if assessment is not None
+                else selected_rationale or rationale_function(claim["text"], evidence)
+            )
             enriched.append(
                 {
                     "claim": claim,
@@ -369,9 +399,28 @@ def enrich_hits(
                     "evidence": evidence,
                     "rationale": rationale,
                     "context": context,
+                    **(
+                        {
+                            "evidence_relation": assessment.get("relation", "insufficient"),
+                            "matched_excerpt": assessment.get("matched_quote") or None,
+                            "assessment_reason": assessment.get("reason", ""),
+                        }
+                        if assessment is not None
+                        else {}
+                    ),
                 }
             )
     return enriched
+
+
+def _assessment_summary(assessment: dict[str, str]) -> str:
+    relation = assessment.get("relation", "insufficient")
+    return {
+        "supports": "The source passage supports the claim within its stated scope.",
+        "contradicts": "The source passage contradicts the claim within its stated scope.",
+        "mixed": "The source passage contains both supporting and contradicting evidence.",
+        "insufficient": "The passage does not establish a supporting or contradicting relation.",
+    }.get(relation, "The passage could not be assessed reliably.")
 
 
 def _validated_excerpt(excerpt: str, context: str, *, fallback: str) -> str:

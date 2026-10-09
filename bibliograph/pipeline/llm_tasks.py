@@ -85,11 +85,26 @@ _RERANK_SCHEMA: dict[str, object] = {
 _EVIDENCE_SCHEMA: dict[str, object] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["supports_claim", "quote", "rationale"],
+    "required": ["relation", "quote", "reason", "scope"],
     "properties": {
-        "supports_claim": {"type": "boolean"},
+        "relation": {
+            "type": "string",
+            "enum": ["supports", "contradicts", "mixed", "insufficient"],
+        },
         "quote": {"type": "string"},
-        "rationale": {"type": "string"},
+        "reason": {"type": "string"},
+        "scope": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["population", "unit", "outcome", "geography", "time"],
+            "properties": {
+                "population": {"type": "string"},
+                "unit": {"type": "string"},
+                "outcome": {"type": "string"},
+                "geography": {"type": "string"},
+                "time": {"type": "string"},
+            },
+        },
     },
 }
 
@@ -457,35 +472,53 @@ def select_evidence(
     context: str,
     *,
     complete: Complete,
-) -> tuple[str, str] | None:
+) -> dict[str, object]:
     chunk, _score = hit
     messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Select exact evidence for a draft claim. Return one structured object with "
-                    "supports_claim (boolean), quote (exact text copied from CONTEXT), "
-                    "and rationale (short explanation). Never invent or paraphrase a quote. "
-                    "Check that the evidence refers to the claim's stated population, unit of "
-                    "analysis, geographic scale, and outcome. Mark supports_claim false when a "
-                    "scope distinction required by the claim is not established by the context."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"CLAIM:\n{claim}\n\nSOURCE:\n{citation_label(chunk.paper)}, "
-                    f"page {chunk.page or 'unknown'}\n\nCONTEXT:\n{context}"
-                ),
-            },
-        ]
-    content = _complete_json(complete, messages, _EVIDENCE_SCHEMA)
-    payload = _json_object(content)
+        {
+            "role": "system",
+            "content": (
+                "Assess the relation between CLAIM and CONTEXT using only the source text. "
+                "relation as supports, contradicts, mixed, or insufficient; quote must "
+                "be exact text copied from CONTEXT; reason must be concise and source-grounded. "
+                "Also return scope fields population, unit, outcome, geography, and time. "
+                "Copy only what the context explicitly states; leave a field empty when unstated. "
+                "Do not infer contradiction from missing evidence. Use insufficient when the "
+                "context is topical but does not establish a relation, including when a table, "
+                "caption, or example cannot establish the claim's population, unit, outcome, "
+                "geography, or time scope. Use mixed only when the context contains both "
+                "supporting and contradicting evidence. A non-insufficient relation requires a "
+                "quote that itself bears on the claim."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"CLAIM:\n{claim}\n\nSOURCE:\n{citation_label(chunk.paper)}, "
+                f"page {chunk.page or 'unknown'}\n\nCONTEXT:\n{context}"
+            ),
+        },
+    ]
+    payload = _json_object(_complete_json(complete, messages, _EVIDENCE_SCHEMA))
+    relation = str(payload.get("relation", "insufficient"))
+    if relation not in {"supports", "contradicts", "mixed", "insufficient"}:
+        relation = "insufficient"
     quote = str(payload.get("quote", "")).strip()
-    rationale = str(payload.get("rationale", "")).strip()
-    if payload.get("supports_claim") and _is_valid_quote(quote, context):
-        return " ".join(quote.split()), rationale
-    return None
+    if relation != "insufficient" and not _is_valid_quote(quote, context):
+        relation = "insufficient"
+        quote = ""
+    raw_scope = payload.get("scope", {})
+    raw_scope = raw_scope if isinstance(raw_scope, dict) else {}
+    scope = {
+        key: str(raw_scope.get(key, "")).strip()
+        for key in ("population", "unit", "outcome", "geography", "time")
+    }
+    return {
+        "relation": relation,
+        "matched_quote": " ".join(quote.split()) if quote else "",
+        "reason": str(payload.get("reason", "")).strip(),
+        "scope": scope,
+    }
 
 
 def explain(claim: str, evidence: str, *, complete: Complete) -> str:

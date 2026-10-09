@@ -25,6 +25,7 @@ from core.knowledge.retrieval import QueryPlan
 from core.knowledge.vector_store import configure as configure_vector_store
 
 from ..domain import Chunk, Paper, RetrievalScore, ScoredChunk
+from .context import join_chunk_context
 from ..knowledge import KnowledgeDocument, QueryRequest, RetrievalResult, RetrievalTrace
 from ..pipeline.classification import PROFILE_VERSION
 from ..pipeline.indexing import INDEXING_FINGERPRINT
@@ -360,6 +361,7 @@ class IkarusBackend:
                 page=_optional_int(metadata.get("page")),
                 section=_optional_str(metadata.get("section")),
                 ordinal=int(metadata.get("ordinal", 0)),
+                content_kind=_optional_str(metadata.get("content_kind")) or "text",
                 evidence_role=_optional_str(metadata.get("evidence_role")),
             )
             hits.append((chunk, score))
@@ -443,7 +445,7 @@ class IkarusBackend:
                 "WHERE singleton=1"
             )
 
-    def context_for(self, chunk: Chunk, *, window: int = 1, max_words: int = 900) -> str:
+    def context_for(self, chunk: Chunk, *, window: int = 1, max_words: int = 360) -> str:
         """Return a chunk with nearby same-section passages as explicit context."""
         self._require_open()
         if window < 0 or max_words < 1:
@@ -475,12 +477,12 @@ class IkarusBackend:
             if section and neighbor_section != section:
                 continue
             nearby.append((neighbor_ordinal, str(content or "")))
-        nearby.sort(key=lambda item: item[0])
-        text = "\n\n".join(value for _ordinal, value in nearby if value.strip())
-        words = text.split()
-        if len(words) <= max_words:
-            return text or chunk.text
-        return " ".join(words[:max_words])
+        text = join_chunk_context(
+            nearby,
+            center_ordinal=ordinal,
+            max_words=max_words,
+        )
+        return text or chunk.text
 
     def stats(self) -> dict[str, Any]:
         self._require_open()

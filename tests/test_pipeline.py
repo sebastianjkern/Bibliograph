@@ -12,7 +12,7 @@ def test_search_render_explains_empty_results_and_keeps_claim():
     rendered = render_search([], claim="Road quality improves market access.")
 
     assert "> Claim: Road quality improves market access." in rendered
-    assert "No matching evidence was found in the indexed PDFs." in rendered
+    assert "No assessed supporting or contradicting evidence was found." in rendered
 
 
 def test_render_prettifies_local_pdf_filename_titles():
@@ -24,6 +24,7 @@ def test_render_prettifies_local_pdf_filename_titles():
         "score": 0.8,
         "evidence": chunk.text,
         "rationale": "Direct evidence.",
+        "evidence_relation": "supports",
     }
 
     rendered = render_search([item])
@@ -84,15 +85,15 @@ def test_shared_retrieval_pipeline_drives_search_and_check_rendering():
     assert "# Local sources" in render_search(items)
     report = render_check(items)
     assert "# Citation suggestions" in report
-    assert "Direct support." in report
+    assert "Assessment:** supports" in report
     assert "| **Title** | Road study |" in report
     assert "| **Vector similarity** | 0.80 |" in report
     assert "| **Lexical closeness** | 0.00 |" in report
-    assert "| **Rerank support** | 0.80 |" in report
+    assert "| **Retrieval relevance** | 0.80 |" in report
     assert "| **DOI** | 10/example |" in report
     assert "| **Page** | 1 |" in report
     assert "### Source context" in report
-    assert "### Explanation" in report
+    assert "**Assessment:** supports" in report
 
 
 def test_retrieval_expands_queries_and_deduplicates_before_reranking():
@@ -212,6 +213,37 @@ def test_only_top_ten_distinct_articles_are_enriched_after_reranking():
     assert "P1" not in enriched
 
 
+def test_search_report_hides_unassessed_passages_unless_verbose():
+    paper = Paper("P1", "A study")
+    supported = {
+        "claim": {"text": "The treatment increased outcomes."},
+        "chunk": Chunk("P1:1:0", paper, "The treatment increased outcomes.", page=4),
+        "score": 0.4,
+        "evidence": "The treatment increased outcomes.",
+        "matched_excerpt": "The treatment increased outcomes.",
+        "evidence_relation": "supports",
+        "evidence_status": "supports",
+        "rationale": "The source passage supports the claim within its stated scope.",
+    }
+    unassessed = {
+        **supported,
+        "chunk": Chunk("P1:2:0", paper, "The study aims to evaluate treatment.", page=5),
+        "evidence": "The study aims to evaluate treatment.",
+        "matched_excerpt": None,
+        "evidence_relation": "insufficient",
+        "evidence_status": "insufficient",
+    }
+
+    default_report = render_search([unassessed, supported])
+    verbose_report = render_search([unassessed, supported], verbose=True)
+
+    assert "The treatment increased outcomes." in default_report
+    assert "The study aims to evaluate treatment." not in default_report
+    assert "The study aims to evaluate treatment." in verbose_report
+    assert "Retrieval relevance" in default_report
+    assert "Rerank support" not in default_report
+
+
 def test_rendered_references_are_sorted_by_support_score():
     paper = Paper("P1", "Road study", ("Ada",), "2024", "10/example")
     chunk_high = Chunk("P1:1:0", paper, "Road quality improves market access.", page=1)
@@ -223,6 +255,7 @@ def test_rendered_references_are_sorted_by_support_score():
             "score": 0.2,
             "evidence": "Infrastructure supports trade.",
             "rationale": "Low score",
+            "evidence_relation": "supports",
         },
         {
             "claim": {"text": "Claim", "citation_keys": ()},
@@ -230,12 +263,13 @@ def test_rendered_references_are_sorted_by_support_score():
             "score": 0.9,
             "evidence": "Road quality improves market access.",
             "rationale": "High score",
+            "evidence_relation": "supports",
         },
     ]
 
     report = render_search(items)
 
-    assert report.index("High score") < report.index("Low score")
+    assert report.index("Road quality improves market access") < report.index("Infrastructure supports trade")
 
 
 def test_evidence_enrichment_prefers_sentence_excerpts_over_metadata_like_quotes():
@@ -383,9 +417,9 @@ def test_langgraph_search_refines_queries_from_retrieved_context():
     )
     assert supported_item["evidence"] == expected_context
     assert supported_item["matched_excerpt"] == "The treatment increased the measured outcome."
-    assert supported_item["rationale"] == "Explanation based on displayed context."
-    assert explanations == [("Claim about treatment and outcome", expected_context)]
-    assert supported_item["evidence_status"] == "supporting_excerpt_selected"
+    assert supported_item["rationale"] == "The source passage supports the claim within its stated scope."
+    assert explanations == []
+    assert supported_item["evidence_status"] == "supports"
     rendered_supported = render_search([supported_item])
     assert (
         "⟦highlight⟧The treatment increased the measured outcome.⟦/highlight⟧"
@@ -393,8 +427,24 @@ def test_langgraph_search_refines_queries_from_retrieved_context():
     )
     assert "### Matched excerpt" not in rendered_supported
     unverified_item = next(item for item in result["items"] if item["chunk"] == initial)
-    assert unverified_item["evidence_status"] == "no_supporting_excerpt_selected"
-    assert "No exact supporting excerpt was verified" in unverified_item["rationale"]
+    assert unverified_item["evidence_status"] == "insufficient"
+    assert "does not establish" in unverified_item["rationale"]
+
+
+def test_workflow_rejects_assessment_quotes_not_found_in_context():
+    from bibliograph.pipeline.evidence_workflow import _normalise_assessment
+
+    result = _normalise_assessment(
+        {
+            "relation": "supports",
+            "matched_quote": "Invented supporting sentence.",
+            "reason": "The model claimed support.",
+        },
+        "The source only describes its methodology.",
+    )
+
+    assert result["relation"] == "insufficient"
+    assert result["matched_quote"] == ""
 
 
 def test_langgraph_search_stops_refining_after_supported_evidence():
