@@ -74,7 +74,7 @@ def _search_claim_with_backend(
         if progress is not None:
             progress("Reranking retrieval candidates")
         hits = _run_reranker(rerank, text, hits, progress)
-    selected_hits = _limit_hits(hits, limit=10, one_per_paper=one_per_paper)
+    selected_hits = _limit_hits(hits, limit=limit, one_per_paper=one_per_paper)
     result = {
         "claim": claim,
         "queries": (text, *alternatives),
@@ -112,6 +112,7 @@ def _render_subtask_results(request, hits, trace, score_details) -> str:
             if "_" in title:
                 title = title.replace("_", " ").title()
             location = f", p. {chunk.page}" if chunk.page is not None else ""
+            role = f" · {chunk.evidence_role}" if chunk.evidence_role else ""
             components = score_details.get(chunk.chunk_id, {})
             component_text = " · ".join(
                 f"{name} {float(components[name]):.2f}"
@@ -123,7 +124,7 @@ def _render_subtask_results(request, hits, trace, score_details) -> str:
             if len(excerpt) > 180:
                 excerpt = excerpt[:177].rsplit(" ", 1)[0] + "…"
             lines.append(
-                f"    - {title}{location} · relevance {float(score):.3f}{suffix}"
+                f"    - {title}{location}{role} · relevance {float(score):.3f}{suffix}"
             )
             if excerpt:
                 lines.append(f"      “{excerpt}”")
@@ -231,7 +232,7 @@ def _search_claim_with_explicit_search(
         progress("Reranking candidates")
     reranker = rerank or heuristic_rerank
     ordered_hits = _run_reranker(reranker, text, hits, progress)
-    selected_hits = _limit_hits(ordered_hits, limit=10, one_per_paper=one_per_paper)
+    selected_hits = _limit_hits(ordered_hits, limit=limit, one_per_paper=one_per_paper)
     result = {
         "claim": claim,
         "queries": tuple(variants),
@@ -526,6 +527,7 @@ def _truncate_excerpt(text: str, *, max_words: int = 60) -> str:
     words = text.split()
     if len(words) <= max_words:
         return text
+
     return " ".join(words[:max_words]) + " ..."
 
 

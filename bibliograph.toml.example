@@ -25,6 +25,11 @@ rerank = "rnj-1"
 evidence = "gemma3:4b"
 rationale = "gemma3:4b"
 
+# Optional chunk-level evidence-role labels. Enabling this requires a rebuild.
+[profiles.default.classification]
+enabled = false
+# model = "qwen3:8b" # defaults to llm.model
+
 [profiles.default.acquisition]
 order = ["cache", "zotero-storage", "zotero-api", "remote"]
 

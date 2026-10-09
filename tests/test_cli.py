@@ -8,9 +8,14 @@ def test_cli_exposes_the_four_primary_commands():
     parser = build_parser()
 
     assert parser.parse_args(["sync", "Methods"]).command == "sync"
+    assert parser.parse_args(["ingest", "papers"]).command == "ingest"
     assert parser.parse_args(["search", "Road quality affects trade"]).command == "search"
     assert parser.parse_args(["check", "draft.tex"]).command == "check"
     assert parser.parse_args(["status"]).command == "status"
+    assert parser.parse_args(["sync", "--reset-pdf-index"]).reset_pdf_index is True
+    assert parser.parse_args(["sync", "--reset"]).reset_pdf_index is True
+    assert parser.parse_args(["ingest-pdfs", "papers", "--reset-pdf-index"]).reset_pdf_index
+    assert parser.parse_args(["ingest", "papers", "--reset"]).reset_pdf_index
 
 
 def test_help_reports_the_resolved_provider_configuration(monkeypatch, capsys):
@@ -148,7 +153,15 @@ def test_legacy_check_explicitly_syncs_before_read_only_check(monkeypatch):
 
     assert main(["--quiet", "check", "draft.tex", "Methods", "--rebuild-db"]) == 0
     assert calls == [
-        ("sync", {"collection": "Methods", "rebuild": True, "show_progress": False}),
+        (
+            "sync",
+            {
+                "collection": "Methods",
+                "rebuild": True,
+                "show_progress": False,
+                "force_reindex": False,
+            },
+        ),
         (
             "check",
             {
@@ -181,11 +194,16 @@ def test_sync_accepts_legacy_rebuild_flag_after_the_subcommand(monkeypatch):
         },
     )
 
-    assert main(["--quiet", "sync", "Methods", "--rebuild-db"]) == 0
+    assert main(["--quiet", "sync", "Methods", "--reset-pdf-index"]) == 0
     assert calls == [
         (
             {"loaded": True},
-            {"collection": "Methods", "rebuild": True, "show_progress": False},
+            {
+                "collection": "Methods",
+                "rebuild": False,
+                "show_progress": False,
+                "force_reindex": True,
+            },
         )
     ]
 

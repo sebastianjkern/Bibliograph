@@ -63,10 +63,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Build a replacement index and swap it in",
     )
     _add_legacy_rebuild_argument(sync)
+    sync.add_argument(
+        "--reset-pdf-index",
+        "--reset",
+        dest="reset_pdf_index",
+        action="store_true",
+        help="Force reindex PDFs in the selected Zotero collection",
+    )
     sync.add_argument("--output", type=Path, help="Write the synchronization summary to a file")
 
     ingest = subparsers.add_parser(
         "ingest-pdfs",
+        aliases=("ingest",),
         help="Index PDFs from a local folder without Zotero",
     )
     ingest.add_argument("directory", type=Path, help="Folder containing PDF files")
@@ -74,6 +82,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--non-recursive",
         action="store_true",
         help="Only inspect PDFs directly inside the folder",
+    )
+    ingest.add_argument(
+        "--reset-pdf-index",
+        "--reset",
+        dest="reset_pdf_index",
+        action="store_true",
+        help="Force reindex PDFs found in this directory",
     )
     ingest.add_argument("--output", type=Path, help="Write the ingestion summary to a file")
 
@@ -212,17 +227,20 @@ def main(argv: list[str] | None = None) -> int:
                 collection=args.collection,
                 rebuild=args.rebuild or legacy_rebuild,
                 show_progress=not args.quiet,
+                force_reindex=args.reset_pdf_index,
             )
             _emit(render_sync(result), args.output)
             return 0
 
-        if args.command == "ingest-pdfs":
+        if args.command in {"ingest-pdfs", "ingest"}:
             if legacy_rebuild:
                 raise ValueError("`--rebuild-db` is only supported by `sync --rebuild`")
             result = run_ingest_pdfs(
                 settings,
                 args.directory,
                 recursive=not args.non_recursive,
+                show_progress=not args.quiet,
+                force_reindex=args.reset_pdf_index,
             )
             _emit(_render_ingest_summary(result), args.output)
             return 0
@@ -306,9 +324,9 @@ def _announce_command(args: argparse.Namespace, settings: dict[str, Any]) -> Non
     elif args.command in {"check", "legacy-suggest"}:
         details.add_row("Task", "Check draft claims and suggest citations")
     elif args.command == "sync":
-        details.add_row("Task", "Acquire, extract, and index collection documents")
-    elif args.command == "ingest-pdfs":
-        details.add_row("Task", "Extract and index local PDFs")
+        details.add_row("Task", "Sync collection PDFs")
+    elif args.command in {"ingest-pdfs", "ingest"}:
+        details.add_row("Task", "Index local PDFs")
     elif args.command == "status":
         details.add_row("Task", "Inspect index and provider readiness")
     Console(stderr=True).print(

@@ -53,6 +53,7 @@ DEFAULT_SETTINGS: Settings = {
         "stages": ["rerank", "evidence", "rationale"],
         "models": {},
     },
+    "classification": {"enabled": False, "model": None},
     "acquisition": {
         "order": ["cache", "zotero-storage", "zotero-api", "remote"],
     },
@@ -300,6 +301,7 @@ def _validate(settings: Mapping[str, Any]) -> None:
     llm = settings.get("llm")
     acquisition = settings.get("acquisition")
     remote = settings.get("remote")
+    classification = settings.get("classification")
     if not isinstance(embedding, Mapping) or not isinstance(llm, Mapping):
         raise ValueError("embedding and llm settings must be tables")
     _validate_provider(embedding, section="embedding", choices=embedding_names())
@@ -343,6 +345,15 @@ def _validate(settings: Mapping[str, Any]) -> None:
             f"{', '.join(unknown_strategies)}; choose from "
             f"{', '.join(sorted(_ACQUISITION_STRATEGIES))}"
         )
+    if not isinstance(classification, Mapping):
+        raise ValueError("classification settings must be a table")
+    if not isinstance(classification.get("enabled"), bool):
+        raise ValueError("classification.enabled must be a boolean")
+    model = classification.get("model")
+    if model is not None and (not isinstance(model, str) or not model.strip()):
+        raise ValueError("classification.model must be a non-empty model name")
+    if classification["enabled"] and mode == "off":
+        raise ValueError("classification.enabled requires llm.mode to be optional or required")
     if not isinstance(remote, Mapping):
         raise ValueError("remote settings must be a table")
     if not isinstance(remote.get("playwright_headless"), bool):

@@ -76,7 +76,7 @@ def search(
     return {
         "result": result,
         "items": items,
-        "markdown": render_search(items),
+        "markdown": render_search(items, claim=claim),
     }
 
 

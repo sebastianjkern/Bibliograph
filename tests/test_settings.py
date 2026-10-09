@@ -176,6 +176,18 @@ def test_settings_rejects_unknown_pipeline_names(overrides, message, monkeypatch
         load_settings(overrides=overrides)
 
 
+def test_evidence_classification_is_opt_in_and_requires_llm(monkeypatch):
+    _clear_environment(monkeypatch)
+    defaults = load_settings()
+    assert defaults["classification"] == {"enabled": False, "model": None}
+
+    with pytest.raises(ValueError, match="requires llm.mode"):
+        load_settings(overrides={
+            "classification": {"enabled": True},
+            "llm": {"mode": "off"},
+        })
+
+
 def test_settings_accepts_provider_aliases_and_resolves_browser_environment(monkeypatch):
     _clear_environment(monkeypatch)
     monkeypatch.setenv("BIBLIOGRAPH_REMOTE_PLAYWRIGHT_PROFILE", "C:/profile")

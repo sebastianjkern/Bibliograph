@@ -8,6 +8,31 @@ from bibliograph.pipeline.retrieval import enrich_hits, retrieve_claims, search_
 from bibliograph.render import render_check, render_search
 
 
+
+def test_search_render_explains_empty_results_and_keeps_claim():
+    rendered = render_search([], claim="Road quality improves market access.")
+
+    assert "> Claim: Road quality improves market access." in rendered
+    assert "No matching evidence was found in the indexed PDFs." in rendered
+
+
+def test_render_prettifies_local_pdf_filename_titles():
+    paper = Paper("LOCAL-1", "spatial_spillover_of_conflict")
+    chunk = Chunk("LOCAL-1:1:0", paper, "Conflict along roads raises maize prices.")
+    item = {
+        "claim": {"text": "Conflict near roads raises maize prices."},
+        "chunk": chunk,
+        "score": 0.8,
+        "evidence": chunk.text,
+        "rationale": "Direct evidence.",
+    }
+
+    rendered = render_search([item])
+
+    assert "Spatial Spillover Of Conflict" in rendered
+    assert "spatial_spillover_of_conflict" not in rendered
+
+
 def test_format_aware_draft_parser_returns_plain_claim_mappings():
     claims = parse_draft(
         "Road quality shapes trade costs and market access. \\cite{roads2024}\n\n"
@@ -312,6 +337,31 @@ def test_knowledge_backend_receives_neutral_query_and_returns_trace():
     assert "Road quality improves market access." in partial_results
     assert "started from 1 indexed passages" in partial_results
     assert "P1:1:0" not in partial_results
+
+
+def test_backend_search_honors_requested_result_limit():
+    paper = Paper("P1", "Road study")
+    chunks = [
+        Chunk(f"P1:{index}:0", paper, f"Road access evidence passage {index}.")
+        for index in range(6)
+    ]
+
+    class Backend:
+        def retrieve_request(self, _request, *, limit, include_trace):
+            assert limit == 10
+            return RetrievalResult(
+                hits=tuple((chunk, 0.8 - index * 0.01) for index, chunk in enumerate(chunks)),
+                score_details={},
+            )
+
+    result = search_claim(
+        {"text": "Road access affects trade.", "citation_keys": ()},
+        backend=Backend(),
+        limit=2,
+        enrich=False,
+    )
+
+    assert len(result["hits"]) == 2
 
 
 def test_backend_retrieval_search_claim_accepts_backend_keyword():

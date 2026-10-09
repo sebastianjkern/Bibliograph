@@ -50,6 +50,11 @@ def test_ikarus_backend_indexes_papers_and_restores_chunk_context(tmp_path):
             Paper("BIO", "Cell Biology"), "BIO", "1", biology_pdf,
             extract_pages=lambda _path: [(3, "Protein folding occurs inside a cell.", "Methods")],
         )
+        # Older generic-ingestion indexes lacked the vector metadata kind marker.
+        with backend.connection:
+            backend.connection.execute(
+                "DELETE FROM vector_attributes WHERE attribute_key='kind'"
+            )
         hits, details = backend.retrieve("road trade market access", limit=5)
 
     assert hits

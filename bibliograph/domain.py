@@ -35,6 +35,7 @@ class Chunk:
     section: str | None = None
     ordinal: int = 0
     content_kind: str = "text"
+    evidence_role: str | None = None
 
     @property
     def chunk_index(self) -> int:

@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import nullcontext
+
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from rich.progress import (
 
 from ..adapters.acquisition import acquire_pdf
 from ..adapters.zotero import discover_collection, resolve_collection
-from ..knowledge import KnowledgeDocument
+from .indexing import index_available_document
 from .progress import StageProgress
 
 
@@ -31,17 +32,28 @@ def sync_library(
     storage_dirs: Iterable[str | Path] = (),
     collection: str | None = None,
     show_progress: bool = True,
+    force_reindex: bool = False,
 ) -> dict[str, Any]:
     """Synchronize one Zotero collection into an injected writable store."""
     identifier = collection or str(settings["collection"])
-    collection_key = resolve_collection(zotero, identifier)
     pdf_dir = settings["pdf_dir"]
-    documents = discover_collection(
-        zotero,
-        collection_key,
-        pdf_dir=pdf_dir,
-        storage_dirs=storage_dirs,
-    )
+    if show_progress:
+        with Console(stderr=True).status("Discovering Zotero collection…", spinner="dots"):
+            collection_key = resolve_collection(zotero, identifier)
+            documents = discover_collection(
+                zotero,
+                collection_key,
+                pdf_dir=pdf_dir,
+                storage_dirs=storage_dirs,
+            )
+    else:
+        collection_key = resolve_collection(zotero, identifier)
+        documents = discover_collection(
+            zotero,
+            collection_key,
+            pdf_dir=pdf_dir,
+            storage_dirs=storage_dirs,
+        )
     summary: dict[str, Any] = {
         "collection": collection_key,
         "discovered": len(documents),
@@ -104,51 +116,31 @@ def sync_library(
                 continue
             if acquired.get("downloaded"):
                 summary["downloaded"].append(source_key)
-            if not store.needs_document(source_key, document.get("version"), path):
+            if stages is not None:
+                stages.update(f"{prefix} Extract and index · {title}")
+            document_progress = (
+                _document_progress_callback(stages, prefix, title)
+                if stages is not None
+                else None
+            )
+            result = index_available_document(
+                store,
+                document["paper"],
+                source_key,
+                document.get("version"),
+                path,
+                extract_pages=extract_pages,
+                metadata=document.get("metadata", {}),
+                progress=document_progress,
+                force_reindex=force_reindex,
+            )
+            if result["state"] == "unchanged":
                 summary["unchanged"].append(source_key)
                 if stages is not None:
                     stages.update(f"{prefix} Unchanged · {title}")
                 if task_id is not None and progress is not None:
                     progress.advance(task_id)
                 continue
-            try:
-                if stages is not None:
-                    stages.update(f"{prefix} Extract and index · {title}")
-                index_document = getattr(store, "index_document", None)
-                if index_document is not None:
-                    result = index_document(
-                        KnowledgeDocument(
-                            source_key=source_key,
-                            paper=document["paper"],
-                            path=Path(path),
-                            version=(
-                                None
-                                if document.get("version") is None
-                                else str(document["version"])
-                            ),
-                            metadata=document.get("metadata", {}),
-                        ),
-                        extract_pages=extract_pages,
-                    )
-                else:
-                    # Compatibility for legacy stores during the knowledge-engine migration.
-                    result = store.index_pdf(
-                        document["paper"],
-                        source_key,
-                        document.get("version"),
-                        path,
-                        extract_pages=extract_pages,
-                    )
-            except Exception as error:
-                store.record_document_failure(
-                    document["paper"],
-                    source_key,
-                    document.get("version"),
-                    state="failed",
-                    detail=str(error),
-                    path=path,
-                )
-                raise
             if result["chunks"]:
                 summary["indexed"].append({"source_key": source_key, "chunks": result["chunks"]})
             else:
@@ -162,6 +154,14 @@ def sync_library(
     store.mark_sync_complete()
     summary["index"] = store.stats()
     return summary
+
+
+def _document_progress_callback(stages: StageProgress, prefix: str, title: str):
+    def report(message: str) -> None:
+        stages.update(f"{prefix} {message} · {title}")
+
+    return report
+
 
 
 def _attempt_detail(attempts: Iterable[Mapping[str, Any]]) -> str:

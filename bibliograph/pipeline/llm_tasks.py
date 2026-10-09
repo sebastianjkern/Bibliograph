@@ -239,7 +239,8 @@ def _rerank_batch(
     candidates = "\n\n".join(
         f"[{index}] {chunk.text}\nSOURCE: {citation_label(chunk.paper)}, "
         f"page {chunk.page or 'unknown'}, section {chunk.section or 'unknown'}, "
-        f"content kind {chunk.content_kind}"
+        f"content kind {chunk.content_kind}, indexed evidence role "
+        f"{chunk.evidence_role or 'unclassified'}"
         for index, (chunk, _score) in enumerate(hits)
     )
     messages = [
@@ -260,9 +261,11 @@ def _rerank_batch(
                     "The evidence_role must be exactly one of result, conclusion, method, "
                     "objective, definition, background, secondary, or other. "
                     "Support means direct factual entailment: the passage must state or clearly "
-                    "report the relationship in the claim. A passage that only shares terminology, "
-                    "states the paper's objective, describes a method, or discusses previous "
-                    "studies "
+                    "report the relationship in the claim. Preserve the claim's population, "
+                    "unit of analysis, geographic scale, outcome, and time period. Do not assume "
+                    "a finding generalizes across populations or measurement units unless the "
+                    "passage establishes that link. A passage that only shares terminology, states the "
+                    "paper's objective, describes a method, or discusses previous studies "
                     "is neutral, "
                     "not supporting. Do not infer importance, causality, or results that are "
                     "absent. "
@@ -311,7 +314,6 @@ def _rerank_support(item: dict, text: str = "") -> float:
 
     if "directly_entails_claim" in item:
         return _boolean_rerank_support(item, text)
-
     return _legacy_rerank_support(item, text)
 
 
@@ -416,7 +418,10 @@ def select_evidence(
                 "content": (
                     "Select exact evidence for a draft claim. Return one structured object with "
                     "supports_claim (boolean), quote (exact text copied from CONTEXT), "
-                    "and rationale (short explanation). Never invent or paraphrase a quote."
+                    "and rationale (short explanation). Never invent or paraphrase a quote. "
+                    "Check that the evidence refers to the claim's stated population, unit of "
+                    "analysis, geographic scale, and outcome. Mark supports_claim false when a "
+                    "scope distinction required by the claim is not established by the context."
                 ),
             },
             {
@@ -445,7 +450,8 @@ def explain(claim: str, evidence: str, *, complete: Complete) -> str:
                     "Assess whether retrieved evidence supports a draft passage. Return only the "
                     "explanation text. Do not prefix the answer with labels like SUPPORT, "
                     "RATIONALE, or ANSWER. Do not use bullets, numbering, or markdown. Keep it "
-                    "to one concise paragraph."
+                    "to one concise paragraph. Preserve the evidence's population, unit of "
+                    "analysis, geographic scale, and outcome. State any scope limitation plainly."
                 ),
             },
             {"role": "user", "content": f"DRAFT:\n{claim}\n\nEVIDENCE:\n{evidence}"},

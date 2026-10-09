@@ -76,6 +76,8 @@ order = ["cache", "zotero-storage", "zotero-api", "remote"]
 
 `llm.models` is optional. Its keys are `expand`, `rerank`, `evidence`, and `rationale`; each value is a model name. An omitted stage uses `llm.model`. The provider, endpoint, and credentials in `[profiles.default.llm]` are shared by all stages. The `stages` list controls which tasks are enabled, independently of the model overrides.
 
+Ingest-time evidence-role classification is separately opt-in with `[profiles.default.classification] enabled = true`. It labels chunks as background, data, methods, results, robustness, discussion, or limitations, and stores classifier scores in the index. It uses the configured chat provider and `llm.model` unless `classification.model` overrides it. Classification adds model calls during indexing; optional LLM mode leaves a chunk unclassified if a call fails. Enabling or changing the profile requires `sync --rebuild` before searching the index.
+
 Choose a profile with `--profile`:
 
 ```bash
@@ -117,7 +119,7 @@ With `llm.mode = "optional"`, provider or structured-output failures are logged 
 
 ## Commands
 
-`sync` and `ingest-pdfs` write to the index. `search`, `check`, and `status` are read-only.
+`sync` and `ingest` (alias: `ingest-pdfs`) write to the index. `search`, `check`, and `status` are read-only.
 
 ```bash
 # Synchronize the configured collection, or name a collection explicitly.
@@ -127,9 +129,15 @@ uv run bibliograph sync "My Collection"
 # Build and validate a replacement index before swapping it into place.
 uv run bibliograph sync --rebuild
 
-# Index PDFs from a local directory; recursive by default.
-uv run bibliograph ingest-pdfs ./papers
+# Force reindex PDFs in the selected Zotero collection:
+uv run bibliograph sync --reset-pdf-index
+
+# Index PDFs from a local directory; recursive by default:
+uv run bibliograph ingest ./papers
 uv run bibliograph ingest-pdfs ./papers --non-recursive
+
+# Force reindex PDFs found in that directory:
+uv run bibliograph ingest-pdfs ./papers --reset-pdf-index
 
 # Search the index for evidence supporting a claim.
 uv run bibliograph search "Road infrastructure improves regional market access"
@@ -160,7 +168,7 @@ Both `search` and `check` accept:
 
 When query expansion is enabled, Bibliograph prints the generated alternative queries during the query-planning step, before candidate retrieval starts. The LLM creates bounded search hypotheses; Ikarus deduplicates semantic and lexical seeds, expands them through the paper graph, and ranks candidates. If reranking is enabled, it refines the candidates before excerpts are presented.
 
-A rebuild validates the configured embedding model before replacing the live database. If the embedding provider cannot be reached, the live database remains untouched. Each database has one active vector space and embedding fingerprint; changing the embedding provider or model requires a rebuild. Legacy databases remain inspectable with `status` but must be migrated with `sync --rebuild` before they can be searched or incrementally synchronized.
+`--reset-pdf-index` (short alias: `--reset`) forces reindexing of PDFs discovered by that command (the selected Zotero collection or local directory); it replaces those documents through the normal indexing path and leaves unrelated indexed sources untouched. A rebuild validates the configured embedding model before replacing the live database. If the embedding provider cannot be reached, the live database remains untouched. Each database has one active vector space and embedding fingerprint; changing the embedding provider or model requires a rebuild. Legacy databases remain inspectable with `status` but must be migrated with `sync --rebuild` before they can be searched or incrementally synchronized.
 
 For one compatibility release, `find-sources` and `find` delegate to `search`, `suggest` delegates to `check`, and `check DRAFT COLLECTION` synchronizes before checking. These commands issue deprecation warnings. Prefer `sync --rebuild` over the legacy `--rebuild-db` spelling.
 

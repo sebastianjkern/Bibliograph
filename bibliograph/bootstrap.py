@@ -34,6 +34,7 @@ from .commands.search import search
 from .commands.status import status
 from .commands.sync import sync_library
 from .logging_utils import get_logger
+from .pipeline.classification import paper_evidence_strategy
 from .pipeline.llm_tasks import (
     expand_query,
     explain,
@@ -55,18 +56,25 @@ def run_sync(
     collection: str | None = None,
     rebuild: bool = False,
     show_progress: bool = True,
+    force_reindex: bool = False,
 ) -> dict:
     embedding = build_embedding(settings)
     # A successful HTTP listener is insufficient: this performs a capability
     # request against the exact model before a staging rebuild is opened.
     embedding["probe"]()
+    classification = _paper_evidence_strategy(settings)
     zotero = build_zotero(settings.get("zotero", {}))
     strategies = _acquisition_strategies(settings, zotero)
     storage_dirs = zotero_storage_dirs(settings.get("zotero_storage_dir"))
     database = settings["db"]
 
     if rebuild:
-        with open_ikarus_staging(database, embedding=embedding) as store:
+        with open_ikarus_staging(
+            database,
+            embedding=embedding,
+            ingestion_strategy=classification,
+            classification_enabled=settings.get("classification", {}).get("enabled", False),
+        ) as store:
             return sync_library(
                 settings,
                 store=store,
@@ -76,9 +84,16 @@ def run_sync(
                 storage_dirs=storage_dirs,
                 collection=collection,
                 show_progress=show_progress,
+                force_reindex=force_reindex,
             )
 
-    with IkarusBackend(database, mode="write", embedding=embedding) as store:
+    with IkarusBackend(
+        database,
+        mode="write",
+        embedding=embedding,
+        ingestion_strategy=classification,
+        classification_enabled=settings.get("classification", {}).get("enabled", False),
+    ) as store:
         return sync_library(
             settings,
             store=store,
@@ -88,6 +103,7 @@ def run_sync(
             storage_dirs=storage_dirs,
             collection=collection,
             show_progress=show_progress,
+            force_reindex=force_reindex,
         )
 
 
@@ -96,15 +112,26 @@ def run_ingest_pdfs(
     directory: str | Path,
     *,
     recursive: bool = True,
+    show_progress: bool = True,
+    force_reindex: bool = False,
 ) -> dict:
     embedding = build_embedding(settings)
     embedding["probe"]()
-    with IkarusBackend(settings["db"], mode="write", embedding=embedding) as store:
+    classification = _paper_evidence_strategy(settings)
+    with IkarusBackend(
+        settings["db"],
+        mode="write",
+        embedding=embedding,
+        ingestion_strategy=classification,
+        classification_enabled=settings.get("classification", {}).get("enabled", False),
+    ) as store:
         return ingest_pdfs(
             directory,
             store=store,
             extract_pages=extract_pages,
             recursive=recursive,
+            show_progress=show_progress,
+            force_reindex=force_reindex,
         )
 
 
@@ -121,7 +148,12 @@ def run_search(
     one_per_paper: bool = False,
 ) -> dict:
     embedding = build_embedding(settings)
-    with IkarusBackend(settings["db"], mode="read", embedding=embedding) as store:
+    with IkarusBackend(
+        settings["db"],
+        mode="read",
+        embedding=embedding,
+        classification_enabled=settings.get("classification", {}).get("enabled", False),
+    ) as store:
         return search(
             claim,
             backend=store,
@@ -150,7 +182,12 @@ def run_check(
     enrich: bool = True,
 ) -> dict:
     embedding = build_embedding(settings)
-    with IkarusBackend(settings["db"], mode="read", embedding=embedding) as store:
+    with IkarusBackend(
+        settings["db"],
+        mode="read",
+        embedding=embedding,
+        classification_enabled=settings.get("classification", {}).get("enabled", False),
+    ) as store:
         return check(
             draft,
             backend=store,
@@ -192,6 +229,38 @@ class _StaticStats:
 
     def stats(self) -> dict:
         return self.value
+
+
+def _paper_evidence_strategy(settings: Settings):
+    """Build optional ingest-time paper-role classification from configured chat."""
+    config = settings.get("classification", {})
+    if not config.get("enabled", False):
+        return None
+    llm_settings = dict(settings["llm"])
+    llm_settings["model"] = config.get("model") or llm_settings["model"]
+    try:
+        complete = build_chat({**settings, "llm": llm_settings})["complete"]
+        strategy = paper_evidence_strategy(complete)
+    except Exception as error:
+        if settings["llm"]["mode"] == "required":
+            raise
+        logger.warning(
+            "Paper evidence classifier unavailable; indexing without labels: %s", error
+        )
+        return None
+    if settings["llm"]["mode"] == "required":
+        return strategy
+
+    def classify(text: str):
+        try:
+            return strategy(text)
+        except Exception as error:
+            logger.warning(
+                "Paper evidence classification failed; keeping chunk unlabelled: %s", error
+            )
+            return {"text": text}
+
+    return classify
 
 
 def _llm_tools(

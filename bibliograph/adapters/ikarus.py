@@ -6,7 +6,7 @@ import json
 import os
 import sqlite3
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -26,6 +26,7 @@ from core.knowledge.vector_store import configure as configure_vector_store
 
 from ..domain import Chunk, Paper, RetrievalScore, ScoredChunk
 from ..knowledge import KnowledgeDocument, QueryRequest, RetrievalResult, RetrievalTrace
+from ..pipeline.classification import PROFILE_VERSION
 from ..pipeline.indexing import INDEXING_FINGERPRINT
 
 INDEX_SCHEMA_VERSION = 1
@@ -59,14 +60,17 @@ class IkarusBackend:
         self,
         path: str | Path,
         *,
-        embedding: dict[str, Any],
+        embedding: Mapping[str, Any],
         mode: str = "read",
+        ingestion_strategy: Callable[[str], dict[str, Any]] | None = None,
+        classification_enabled: bool = False,
     ) -> None:
         if mode not in {"read", "write"}:
             raise ValueError("mode must be 'read' or 'write'")
         self.path = Path(path)
         self.mode = mode
         self.embedding = embedding
+        self.ingestion_strategy = ingestion_strategy
         self.embedding_id = str(embedding["id"])
         probe = embedding["probe"]()
         self.embedding_dimension = int(probe["dimension"])
@@ -75,7 +79,11 @@ class IkarusBackend:
             embedding_id=self.embedding_id,
             embedding_dimension=self.embedding_dimension,
             ingestion_fingerprint=INDEXING_FINGERPRINT,
-            graph_profile_fingerprint=GRAPH_PROFILE_FINGERPRINT,
+            graph_profile_fingerprint=(
+                f"{GRAPH_PROFILE_FINGERPRINT}+{PROFILE_VERSION}"
+                if ingestion_strategy is not None or classification_enabled
+                else GRAPH_PROFILE_FINGERPRINT
+            ),
             lexical_schema_version=LEXICAL_SCHEMA_VERSION,
         )
         self._assert_index_kind(create=mode == "write")
@@ -155,6 +163,7 @@ class IkarusBackend:
         document: KnowledgeDocument,
         *,
         extract_pages: Callable[[str | Path], list[tuple[int, str, str | None]]],
+        progress: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         """Index through Ikarus's generic ingestion pipeline.
 
@@ -163,8 +172,12 @@ class IkarusBackend:
         indexing, and cleanup.
         """
         self._require_write()
+        if progress is not None:
+            progress("Extracting PDF pages")
         pages = extract_pages(document.path)
         chunks = _chunk_paper(document.paper, pages)
+        if progress is not None:
+            progress(f"Prepared {len(chunks)} chunks")
         record = DocumentRecord(
             document.source_key,
             document.path.resolve().as_uri(),
@@ -180,6 +193,7 @@ class IkarusBackend:
                 yield {
                     "text": chunk.text,
                     "metadata": {
+                        "kind": "chunk",
                         "page": chunk.page,
                         "section": chunk.section,
                         "ordinal": chunk.ordinal,
@@ -187,11 +201,28 @@ class IkarusBackend:
                     },
                 }
 
+        ingest_strategy = self.ingestion_strategy
+        if ingest_strategy is not None and progress is not None:
+            classified = 0
+
+            def report_classification(text: str):
+                nonlocal classified
+                classified += 1
+                progress(f"Classifying evidence · {classified}/{len(chunks)} chunks")
+                prepared = ingest_strategy(text)
+                if classified == len(chunks):
+                    progress(f"Embedding and indexing {len(chunks)} chunks")
+                return prepared
+
+            ingest_strategy = report_classification
+        elif progress is not None:
+            progress(f"Embedding and indexing {len(chunks)} chunks")
         ingested = ingest_documents(
             str(document.path),
             filesystem=LocalFilesystem(),
             loader=load_document,
             chunker=chunk_document,
+            strategy=ingest_strategy,
             document=record,
             batch_embedder=self.embedding["embed_documents"],
             graph_store=self.graph,
@@ -234,85 +265,16 @@ class IkarusBackend:
         extract_pages: Callable[[str | Path], list[tuple[int, str, str | None]]],
     ) -> dict[str, Any]:
         self._require_write()
-        pages = extract_pages(path)
-        chunks = [
-            Chunk(
-                f"{source_key}:{chunk.ordinal}",
-                paper,
-                chunk.text,
-                page=chunk.page,
-                section=chunk.section,
-                ordinal=chunk.ordinal,
-                content_kind=chunk.content_kind,
-            )
-            for chunk in _chunk_paper(paper, pages)
-        ]
-        unsupported = {chunk.content_kind for chunk in chunks} - set(self.embedding.get("kinds", ("text",)))
-        if unsupported:
-            raise ValueError(f"Embedding provider does not support content kinds: {sorted(unsupported)}")
-        vectors: list[list[float]] = []
-        for offset in range(0, len(chunks), 32):
-            batch = self.embedding["embed_documents"](
-                [chunk.text for chunk in chunks[offset : offset + 32]]
-            )
-            if len(batch) != len(chunks[offset : offset + 32]):
-                raise ValueError("Embedding provider returned a different number of vectors")
-            if any(len(vector) != self.embedding_dimension for vector in batch):
-                raise ValueError("Embedding dimension differs from the index manifest")
-            vectors.extend(batch)
-
-        record = DocumentRecord(
-            source_key,
-            Path(path).resolve().as_uri(),
-            None if version is None else str(version),
-            _paper_metadata(paper, source_key, path),
+        return self.index_document(
+            KnowledgeDocument(
+                source_key=source_key,
+                paper=paper,
+                path=Path(path),
+                version=None if version is None else str(version),
+            ),
+            extract_pages=extract_pages,
         )
-        chunk_nodes = tuple(_chunk_node(chunk, record) for chunk in chunks)
-        graph_plan = _paper_graph(record, chunk_nodes)
-        all_nodes = (*chunk_nodes, *graph_plan.nodes)
-        vector_rows = [
-            (_chunk_metadata(chunk, record), vector)
-            for chunk, vector in zip(chunks, vectors, strict=True)
-        ]
-        lexical_rows = [
-            (node.identifier, node.content, node.metadata)
-            for node in all_nodes
-            if node.content.strip()
-        ]
 
-        self._delete_document(source_key)
-        try:
-            for node, (metadata, vector) in zip(chunk_nodes, vector_rows, strict=True):
-                sqlite_vec.add(node.identifier, vector, metadata)
-            for node in all_nodes:
-                self.graph.put_node(node)
-            for edge in graph_plan.edges:
-                self.graph.put_edge(edge)
-            self.lexical.replace_document(source_key, lexical_rows)
-            stat = Path(path).stat()
-            with self.connection:
-                self.connection.execute(
-                    """INSERT INTO bibliograph_sources(
-                           source_key, document_id, version, path, mtime_ns, size, state, detail
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
-                       ON CONFLICT(source_key) DO UPDATE SET
-                         document_id=excluded.document_id, version=excluded.version,
-                         path=excluded.path, mtime_ns=excluded.mtime_ns, size=excluded.size,
-                         state=excluded.state, detail=NULL, updated_at=CURRENT_TIMESTAMP""",
-                    (
-                        source_key,
-                        source_key,
-                        None if version is None else str(version),
-                        str(Path(path).resolve()),
-                        stat.st_mtime_ns,
-                        stat.st_size,
-                        "indexed" if chunks else "empty",
-                    ),
-                )
-        except Exception:
-            self._delete_document(source_key)
-            raise
-        return {"source_key": source_key, "chunks": len(chunks), "path": str(path)}
 
     def retrieve(
         self,
@@ -374,7 +336,14 @@ class IkarusBackend:
         hits: list[ScoredChunk] = []
         details: dict[str, dict[str, float]] = {}
         for result in results:
-            metadata = result.metadata or {}
+            metadata = dict(result.metadata or {})
+            if "kind" not in metadata:
+                row = self.connection.execute(
+                    "SELECT kind FROM graph_nodes WHERE identifier=?",
+                    (result.identifier,),
+                ).fetchone()
+                if row is not None:
+                    metadata["kind"] = row[0]
             if metadata.get("kind") != "chunk":
                 continue
             paper = _paper_from_metadata(metadata, result.identifier)
@@ -391,6 +360,7 @@ class IkarusBackend:
                 page=_optional_int(metadata.get("page")),
                 section=_optional_str(metadata.get("section")),
                 ordinal=int(metadata.get("ordinal", 0)),
+                evidence_role=_optional_str(metadata.get("evidence_role")),
             )
             hits.append((chunk, score))
             details[chunk.chunk_id] = {
@@ -700,7 +670,13 @@ def inspect_ikarus_index(path: str | Path) -> dict[str, Any]:
 
 
 @contextmanager
-def open_ikarus_staging(path: str | Path, *, embedding: dict[str, Any]):
+def open_ikarus_staging(
+    path: str | Path,
+    *,
+    embedding: Mapping[str, Any],
+    ingestion_strategy: Callable[[str], dict[str, Any]] | None = None,
+    classification_enabled: bool = False,
+):
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     descriptor, name = tempfile.mkstemp(prefix=f".{target.name}.ikarus-staging-", dir=target.parent)
@@ -708,7 +684,13 @@ def open_ikarus_staging(path: str | Path, *, embedding: dict[str, Any]):
     staging = Path(name)
     backend = None
     try:
-        backend = IkarusBackend(staging, embedding=embedding, mode="write")
+        backend = IkarusBackend(
+            staging,
+            embedding=embedding,
+            mode="write",
+            ingestion_strategy=ingestion_strategy,
+            classification_enabled=classification_enabled,
+        )
         yield backend
         summary = backend.stats()
         backend.close()
