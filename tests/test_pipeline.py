@@ -271,6 +271,7 @@ def test_knowledge_backend_receives_neutral_query_and_returns_trace():
     trace = RetrievalTrace(
         nodes=({"id": chunk.chunk_id, "kind": "chunk"},),
         edges=(),
+        metadata={"seeds": ({"id": chunk.chunk_id, "kind": "chunk"},)},
     )
 
     class Backend:
@@ -282,12 +283,14 @@ def test_knowledge_backend_receives_neutral_query_and_returns_trace():
                 trace=trace,
             )
 
+    progress_messages = []
     result = search_claim(
         {"text": "Road quality affects market access.", "citation_keys": ()},
         backend=Backend(),
         expand=lambda _claim: ["Transport infrastructure and trade"],
         enrich=False,
         include_trace=True,
+        progress=progress_messages.append,
     )
 
     request, limit, include_trace = requests[0]
@@ -298,6 +301,17 @@ def test_knowledge_backend_receives_neutral_query_and_returns_trace():
     assert limit == 10
     assert include_trace is True
     assert result["retrieval_trace"] is trace
+    partial_results = next(
+        message for message in progress_messages if message.startswith("Search subtask results:")
+    )
+    assert "\\n" not in partial_results
+    assert "Query plan: 1 alternatives" in partial_results
+    assert "Alternative:" not in partial_results
+    assert "Road study" in partial_results
+    assert "relevance 0.800" in partial_results
+    assert "Road quality improves market access." in partial_results
+    assert "started from 1 indexed passages" in partial_results
+    assert "P1:1:0" not in partial_results
 
 
 def test_backend_retrieval_search_claim_accepts_backend_keyword():

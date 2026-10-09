@@ -45,10 +45,7 @@ def _search_claim_with_backend(
             progress("Plan query · generating alternatives")
         alternatives = _run_expander(expand, text, progress)
         if progress is not None:
-            rendered = "\n".join(f"  - {query}" for query in alternatives)
-            if not rendered:
-                rendered = "  - No alternatives generated"
-            progress(f"Search subtask results:\n{rendered}")
+            progress(f"Plan query · {len(alternatives)} alternatives ready")
     if progress is not None:
         progress(f"Retrieve candidates · {1 + len(alternatives)} queries")
     request = QueryRequest.from_alternatives(text, alternatives)
@@ -57,7 +54,7 @@ def _search_claim_with_backend(
         engine_result = retrieve_request(
             request,
             limit=max(limit, 10),
-            include_trace=include_trace,
+            include_trace=include_trace or progress is not None,
         )
         hits = list(engine_result.hits)
         score_details = dict(engine_result.score_details)
@@ -71,6 +68,8 @@ def _search_claim_with_backend(
         )
         retrieval_trace = None
     hits = [hit for hit in hits if hit[1] >= min_score]
+    if progress is not None:
+        progress(_render_subtask_results(request, hits, retrieval_trace, score_details))
     if rerank is not None:
         if progress is not None:
             progress("Reranking retrieval candidates")
@@ -98,6 +97,54 @@ def _search_claim_with_backend(
             top_only=top_only,
         )
     return result
+
+
+def _render_subtask_results(request, hits, trace, score_details) -> str:
+    lines = ["Search subtask results:", f"  Query: {request.text}"]
+    if request.hypotheses:
+        lines.append(f"  Query plan: {len(request.hypotheses)} alternatives")
+
+    if hits:
+        lines.append("  Evidence candidates:")
+        for chunk, score in hits[:5]:
+            paper = chunk.paper
+            title = paper.title.strip() or paper.zotero_key
+            if "_" in title:
+                title = title.replace("_", " ").title()
+            location = f", p. {chunk.page}" if chunk.page is not None else ""
+            components = score_details.get(chunk.chunk_id, {})
+            component_text = " · ".join(
+                f"{name} {float(components[name]):.2f}"
+                for name in ("vector", "lexical", "graph")
+                if name in components
+            )
+            suffix = f" ({component_text})" if component_text else ""
+            excerpt = " ".join(chunk.text.split())
+            if len(excerpt) > 180:
+                excerpt = excerpt[:177].rsplit(" ", 1)[0] + "…"
+            lines.append(
+                f"    - {title}{location} · relevance {float(score):.3f}{suffix}"
+            )
+            if excerpt:
+                lines.append(f"      “{excerpt}”")
+    else:
+        lines.append("  Evidence candidates: none")
+
+    if trace is not None:
+        seed_count = len(trace.metadata.get("seeds", ()))
+        path_count = len(trace.paths)
+        edge_count = len(trace.edges)
+        if path_count:
+            lines.append(f"  Retrieval context: graph expansion followed {path_count} paths")
+        elif edge_count:
+            lines.append(f"  Retrieval context: graph expansion used {edge_count} links")
+        elif seed_count:
+            lines.append(f"  Retrieval context: started from {seed_count} indexed passages")
+        else:
+            lines.append("  Retrieval context: no graph expansion paths returned")
+    else:
+        lines.append("  Retrieval context: provenance unavailable")
+    return "\n".join(lines)
 
 
 def search_claim(
