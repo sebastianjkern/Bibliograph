@@ -48,6 +48,11 @@ dev = [
 [project.scripts]
 bibliograph = "bibliograph.cli:main"
 
+# Use the adjacent checkout while developing Bibliograph and Ikarus together.
+# The project dependency above remains Git-based for standalone installations.
+[tool.uv.sources]
+ikarus = { path = "../ikarus", editable = true }
+
 [tool.setuptools.packages.find]
 include = ["bibliograph*"]
 

@@ -18,6 +18,7 @@ from rich.progress import (
 from ..pipeline.drafts import parse_draft_file
 from ..pipeline.retrieval import search_claim
 from ..render import render_check
+from .progress import StageProgress
 
 
 def check(
@@ -33,16 +34,19 @@ def check(
     claims = parse_draft_file(draft)
     progress_cm = _progress_context(show_progress)
     with progress_cm as progress:
-        task_id = (
-            progress.add_task("Checking draft", total=len(claims))
-            if progress is not None and claims
+        task_id = None
+        if progress is not None and claims:
+            task_id = progress.add_task("Checking draft", total=len(claims))
+        stages = (
+            StageProgress(progress, task_id)
+            if progress is not None and task_id is not None
             else None
         )
         results = []
         for claim in claims:
             def update_progress(description: str) -> None:
-                if progress is not None:
-                    progress.update(task_id, description=description, refresh=True)
+                if stages is not None:
+                    stages.update(f"[{len(results) + 1}/{len(claims)}] {description}")
 
             result = search_claim(
                 claim,
@@ -58,12 +62,12 @@ def check(
                 top_only=True,
             )
             results.append(result)
-            if task_id is not None:
+            if task_id is not None and progress is not None:
                 progress.advance(task_id)
                 progress.refresh()
         items = [item for result in results for item in result["items"]]
-        if task_id is not None:
-            progress.update(task_id, description="Check complete", refresh=True)
+        if task_id is not None and stages is not None:
+            stages.complete("✓ Draft check complete")
     return {"claims": claims, "results": results, "items": items, "markdown": render_check(items)}
 
 

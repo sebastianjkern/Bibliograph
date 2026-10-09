@@ -9,6 +9,8 @@ from typing import Any
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.table import Table
 
 from .bootstrap import run_check, run_ingest_pdfs, run_search, run_status, run_sync
 from .logging_utils import configure_logging, get_logger
@@ -192,6 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         settings = load_settings(args.config, args.profile, _settings_overrides(args))
         logger.info("Command: %s", args.command)
+        _announce_command(args, settings)
         legacy_rebuild = args.rebuild_db or getattr(args, "subcommand_rebuild_db", False)
         if legacy_rebuild:
             logger.warning("`--rebuild-db` is deprecated; use `sync --rebuild` instead")
@@ -274,6 +277,40 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as error:
         logger.error("%s", error)
         return 1
+
+
+def _announce_command(args: argparse.Namespace, settings: dict[str, Any]) -> None:
+    """Show the active run plan in a compact agent-style banner."""
+    if args.quiet:
+        return
+    embedding = settings.get("embedding", {})
+    llm = settings.get("llm", {})
+    details = Table.grid(padding=(0, 1))
+    details.add_column(style="bright_black")
+    details.add_column(style="white")
+    details.add_row("Profile", str(args.profile))
+    details.add_row("Embeddings", f"{embedding.get('provider')} · {embedding.get('model')}")
+    details.add_row("Reasoning", f"{llm.get('provider')} · {llm.get('model')}")
+    details.add_row("Index", str(settings.get("db")))
+    if args.command in {"search", "legacy-search"}:
+        details.add_row("Task", "Find and rank evidence for one claim")
+    elif args.command in {"check", "legacy-suggest"}:
+        details.add_row("Task", "Check draft claims and suggest citations")
+    elif args.command == "sync":
+        details.add_row("Task", "Acquire, extract, and index collection documents")
+    elif args.command == "ingest-pdfs":
+        details.add_row("Task", "Extract and index local PDFs")
+    elif args.command == "status":
+        details.add_row("Task", "Inspect index and provider readiness")
+    Console(stderr=True).print(
+        Panel(
+            details,
+            title="[bold cyan]Bibliograph[/bold cyan]",
+            subtitle=f"[dim]{args.command}[/dim]",
+            border_style="cyan",
+            padding=(0, 1),
+        )
+    )
 
 
 def _print_configuration_summary(config_path: Path | None, profile: str) -> None:

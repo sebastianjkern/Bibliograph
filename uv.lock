@@ -96,7 +96,7 @@ zotero = [
 requires-dist = [
     { name = "doidownloader", marker = "extra == 'all'", specifier = ">=0.1.0" },
     { name = "doidownloader", marker = "extra == 'remote'", specifier = ">=0.1.0" },
-    { name = "ikarus", git = "ssh://git@github.com/sebastianjkern/ikarus.git" },
+    { name = "ikarus", editable = "../ikarus" },
     { name = "openai", marker = "extra == 'all'", specifier = ">=1.40" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.40" },
     { name = "playwright", marker = "extra == 'all'", specifier = ">=1.50" },
@@ -523,7 +523,7 @@ wheels = [
 [[package]]
 name = "ikarus"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/sebastianjkern/ikarus.git#24bd589b309dd6c6d19923b021332945ec5d3e15" }
+source = { editable = "../ikarus" }
 dependencies = [
     { name = "fsspec" },
     { name = "jsonschema" },
@@ -532,6 +532,18 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "sqlite-vec" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "fsspec" },
+    { name = "jsonschema", specifier = ">=4.20" },
+    { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=0.2" },
+    { name = "laya" },
+    { name = "ollama", specifier = ">=0.6.3" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "sqlite-vec" },
+]
+provides-extras = ["langgraph"]
 
 [[package]]
 name = "iniconfig"

@@ -19,13 +19,13 @@ from .adapters.acquisition import (
     zotero_api_strategy,
     zotero_storage_strategy,
 )
-from .adapters.pdf import extract_pages
 from .adapters.ikarus import (
     IkarusBackend,
     inspect_ikarus_index,
     is_ikarus_index,
     open_ikarus_staging,
 )
+from .adapters.pdf import extract_pages
 from .adapters.sqlite import SQLiteStore
 from .adapters.zotero import build_zotero, zotero_storage_dirs
 from .commands.check import check
@@ -205,16 +205,22 @@ def _llm_tools(
         return {}
 
     fallbacks = _deterministic_llm_tools(stages)
-    try:
-        chat = build_chat(settings)
-    except Exception as error:
-        if mode == "required":
-            raise
-        logger.warning("LLM initialization unavailable; using configured fallbacks: %s", error)
-        return fallbacks
-    complete = chat["complete"]
+    model_overrides = llm_settings.get("models", {})
+    chats: dict[str, Any] = {}
 
-    def optional(stage: str, primary: Callable, fallback: Callable) -> Callable:
+    def stage_tool(stage: str, label: str, factory: Callable) -> Callable:
+        model = model_overrides.get(stage, llm_settings["model"])
+        try:
+            if model not in chats:
+                stage_settings = dict(llm_settings)
+                stage_settings["model"] = model
+                chats[model] = build_chat({**settings, "llm": stage_settings})
+            primary = factory(chats[model]["complete"])
+        except Exception as error:
+            if mode == "required":
+                raise
+            logger.warning("LLM %s initialization unavailable; using fallback: %s", label, error)
+            return fallbacks[stage]
         if mode == "required":
             return primary
 
@@ -223,44 +229,33 @@ def _llm_tools(
             try:
                 return primary(*args, **kwargs)
             except Exception as error:
-                logger.warning("LLM %s unavailable; using fallback: %s", stage, error)
-                return fallback(*args, **kwargs)
+                logger.warning("LLM %s unavailable; using fallback: %s", label, error)
+                return fallbacks[stage](*args, **kwargs)
 
         return run
 
     tools: dict[str, Callable] = {}
     if "rerank" in stages:
-        tools["rerank"] = optional(
-            "reranking",
-            lambda claim, hits, progress=None: rerank(
-                claim,
-                hits,
-                complete=complete,
-                progress=progress,
-            ),
-            fallbacks["rerank"],
+        tools["rerank"] = stage_tool(
+            "rerank", "reranking", lambda complete: lambda claim, hits, progress=None: rerank(
+                claim, hits, complete=complete, progress=progress
+            )
         )
     if "expand" in stages:
-        tools["expand"] = optional(
-            "query expansion",
-            lambda claim, progress=None: expand_query(
-                claim,
-                complete=complete,
-                progress=progress,
-            ),
-            fallbacks["expand"],
+        tools["expand"] = stage_tool(
+            "expand", "query expansion", lambda complete: lambda claim, progress=None: expand_query(
+                claim, complete=complete, progress=progress
+            )
         )
     if "evidence" in stages:
-        tools["select_evidence"] = optional(
-            "evidence extraction",
-            lambda claim, hit, context: select_evidence(claim, hit, context, complete=complete),
-            fallbacks["select_evidence"],
+        tools["select_evidence"] = stage_tool(
+            "evidence", "evidence extraction", lambda complete: lambda claim, hit, context:
+            select_evidence(claim, hit, context, complete=complete)
         )
     if "rationale" in stages:
-        tools["explain"] = optional(
-            "rationale generation",
-            lambda claim, evidence: explain(claim, evidence, complete=complete),
-            fallbacks["explain"],
+        tools["explain"] = stage_tool(
+            "rationale", "rationale generation", lambda complete: lambda claim, evidence:
+            explain(claim, evidence, complete=complete)
         )
     return tools
 

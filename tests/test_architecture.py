@@ -397,6 +397,29 @@ def test_optional_llm_initialization_failure_uses_configured_fallbacks(monkeypat
     )
 
 
+def test_llm_stage_model_overrides_are_passed_to_matching_chat_runtimes(monkeypatch):
+    settings = _hash_settings("unused.db")
+    settings["llm"] = {
+        "provider": "ollama",
+        "model": "shared-model",
+        "mode": "required",
+        "stages": ["expand", "rerank", "evidence", "rationale"],
+        "models": {"expand": "expand-model", "evidence": "evidence-model"},
+    }
+    configured_models = []
+
+    def build_chat(config):
+        configured_models.append(config["llm"]["model"])
+        return {"complete": lambda *_args, **_kwargs: "{}"}
+
+    monkeypatch.setattr("bibliograph.bootstrap.build_chat", build_chat)
+
+    tools = bootstrap._llm_tools(settings)
+
+    assert set(tools) == {"expand", "rerank", "select_evidence", "explain"}
+    assert configured_models == ["shared-model", "expand-model", "evidence-model"]
+
+
 def test_query_expansion_parses_typed_alternatives():
     from bibliograph.pipeline.llm_tasks import expand_query
 

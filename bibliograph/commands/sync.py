@@ -18,6 +18,7 @@ from rich.progress import (
 from ..adapters.acquisition import acquire_pdf
 from ..adapters.zotero import discover_collection, resolve_collection
 from ..knowledge import KnowledgeDocument
+from .progress import StageProgress
 
 
 def sync_library(
@@ -64,16 +65,20 @@ def sync_library(
         else nullcontext()
     )
     with progress_cm as progress:
-        task_id = (
-            progress.add_task("Synchronizing documents", total=len(documents))
-            if show_progress and documents
+        task_id = None
+        if progress is not None and show_progress and documents:
+            task_id = progress.add_task("Synchronizing documents", total=len(documents))
+        stages = (
+            StageProgress(progress, task_id)
+            if progress is not None and task_id is not None
             else None
         )
-        for document in documents:
+        for position, document in enumerate(documents, start=1):
             source_key = str(document["source_key"])
             title = document["paper"].title
-            if task_id is not None:
-                progress.update(task_id, description=f"Acquiring {title}")
+            prefix = f"[{position}/{len(documents)}]"
+            if stages is not None:
+                stages.update(f"{prefix} Acquire PDF · {title}")
             acquired = acquire_pdf(document, strategies=strategies)
             path = acquired.get("path")
             if not path:
@@ -92,20 +97,23 @@ def sync_library(
                         "attempts": acquired.get("attempts", ()),
                     }
                 )
-                if task_id is not None:
+                if stages is not None:
+                    stages.update(f"{prefix} Missing PDF · {title}")
+                if task_id is not None and progress is not None:
                     progress.advance(task_id)
                 continue
             if acquired.get("downloaded"):
                 summary["downloaded"].append(source_key)
             if not store.needs_document(source_key, document.get("version"), path):
                 summary["unchanged"].append(source_key)
-                if task_id is not None:
-                    progress.update(task_id, description=f"Skipping {title}")
+                if stages is not None:
+                    stages.update(f"{prefix} Unchanged · {title}")
+                if task_id is not None and progress is not None:
                     progress.advance(task_id)
                 continue
             try:
-                if task_id is not None:
-                    progress.update(task_id, description=f"Indexing {title}")
+                if stages is not None:
+                    stages.update(f"{prefix} Extract and index · {title}")
                 index_document = getattr(store, "index_document", None)
                 if index_document is not None:
                     result = index_document(
@@ -145,8 +153,12 @@ def sync_library(
                 summary["indexed"].append({"source_key": source_key, "chunks": result["chunks"]})
             else:
                 summary["empty"].append(source_key)
-            if task_id is not None:
+            if stages is not None:
+                stages.update(f"{prefix} Indexed · {title}")
+            if task_id is not None and progress is not None:
                 progress.advance(task_id)
+        if stages is not None:
+            stages.complete("✓ Synchronization complete")
     store.mark_sync_complete()
     summary["index"] = store.stats()
     return summary

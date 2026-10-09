@@ -41,10 +41,15 @@ def _search_claim_with_backend(
     alternatives: list[str] = []
     if expand is not None:
         if progress is not None:
-            progress("Preparing query expansion")
+            progress("Plan query · generating alternatives")
         alternatives = _run_expander(expand, text, progress)
+        if progress is not None:
+            rendered = "\n".join(f"  - {query}" for query in alternatives)
+            if not rendered:
+                rendered = "  - No alternatives generated"
+            progress(f"Search subtask results:\n{rendered}")
     if progress is not None:
-        progress("Retrieving evidence · 1/1 queries")
+        progress(f"Retrieve candidates · {1 + len(alternatives)} queries")
     request = QueryRequest.from_alternatives(text, alternatives)
     retrieve_request = getattr(backend, "retrieve_request", None)
     if retrieve_request is not None:

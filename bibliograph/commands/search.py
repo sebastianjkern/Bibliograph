@@ -15,6 +15,7 @@ from rich.progress import (
 
 from ..pipeline.retrieval import search_claim
 from ..render import render_search
+from .progress import StageProgress
 
 
 def search(
@@ -29,22 +30,31 @@ def search(
 ) -> dict[str, Any]:
     progress_cm = _progress_context(show_progress)
     with progress_cm as progress:
-        def update_progress(description: str) -> None:
-            if progress is None:
-                return
-            completed = _stage_progress(description)
-            progress.update(
-                task_id,
-                description=description,
-                completed=completed,
-                refresh=True,
-            )
 
         task_id = (
             progress.add_task("Preparing search", total=5)
             if progress is not None
             else None
         )
+        stages = (
+            StageProgress(progress, task_id)
+            if progress is not None and task_id is not None
+            else None
+        )
+
+        def report_stage(description: str) -> None:
+            if description.startswith("Search subtask results:"):
+                if progress is not None:
+                    progress.console.print(description, markup=False)
+                return
+            if stages is not None and progress is not None and task_id is not None:
+                stages.update(description)
+                progress.update(
+                    task_id,
+                    completed=_stage_progress(description),
+                    refresh=True,
+                )
+
         result = search_claim(
             {"text": claim, "line_start": None, "citation_keys": (), "source_format": None},
             backend=backend,
@@ -52,20 +62,20 @@ def search(
             min_score=min_score,
             expand=llm_tools.get("expand"),
             rerank=llm_tools.get("rerank"),
-            progress=update_progress,
+            progress=report_stage if stages is not None else None,
             select_evidence=llm_tools.get("select_evidence"),
             explain=llm_tools.get("explain"),
             enrich=enrich,
         )
         items = result["items"]
-        if task_id is not None:
-            progress.update(
-                task_id,
-                completed=5,
-                description="Search complete",
-                refresh=True,
-            )
-    return {"result": result, "items": items, "markdown": render_search(items)}
+        if task_id is not None and stages is not None and progress is not None:
+            progress.update(task_id, completed=5, refresh=True)
+            stages.complete("✓ Search complete")
+    return {
+        "result": result,
+        "items": items,
+        "markdown": render_search(items),
+    }
 
 
 def _stage_progress(description: str) -> float:
@@ -81,7 +91,9 @@ def _stage_progress(description: str) -> float:
         return fraction
     if description.startswith("Embedding"):
         return 2.0
-    if description.startswith("Retrieving evidence"):
+    if description.startswith(("Retrieving evidence", "Retrieve candidates")):
+        if ratio is None:
+            return 2.0
         return 2.0 + max(0.0, fraction - (1.0 / max(1, int(ratio.split("/")[1]))))
     if description.startswith("Reranking candidates ·"):
         return 3.0 + fraction
@@ -104,5 +116,5 @@ def _progress_context(show_progress: bool):
         TimeElapsedColumn(),
         TextColumn("[bold cyan]{task.description}"),
         console=Console(stderr=True),
-        transient=False,
+        transient=True,
     )

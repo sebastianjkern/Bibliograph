@@ -51,6 +51,7 @@ DEFAULT_SETTINGS: Settings = {
         "api_key": None,
         "mode": "optional",
         "stages": ["rerank", "evidence", "rationale"],
+        "models": {},
     },
     "acquisition": {
         "order": ["cache", "zotero-storage", "zotero-api", "remote"],
@@ -318,6 +319,17 @@ def _validate(settings: Mapping[str, Any]) -> None:
             "llm.stages contains unknown stage(s): "
             f"{', '.join(unknown_stages)}; choose from {', '.join(sorted(_LLM_STAGES))}"
         )
+    models = llm.get("models", {})
+    if not isinstance(models, Mapping):
+        raise ValueError("llm.models must be a table mapping stages to model names")
+    unknown_model_stages = sorted(set(models) - _LLM_STAGES)
+    if unknown_model_stages:
+        raise ValueError(
+            "llm.models contains unknown stage(s): "
+            f"{', '.join(unknown_model_stages)}; choose from {', '.join(sorted(_LLM_STAGES))}"
+        )
+    if any(not isinstance(model, str) or not model.strip() for model in models.values()):
+        raise ValueError("llm.models values must be non-empty model names")
     if (
         not isinstance(acquisition, Mapping)
         or not isinstance(acquisition.get("order"), list)
