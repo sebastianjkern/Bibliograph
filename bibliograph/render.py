@@ -1,9 +1,9 @@
 """Pure Markdown renderers for workflow result dictionaries."""
 
-import re
 from collections.abc import Iterable
 
 from .domain import citation_label
+from .text_matching import find_text_span
 
 
 def render_search(
@@ -18,16 +18,18 @@ def render_search(
     assessed = [
         item
         for item in items
-        if item.get("evidence_relation") in {"supports", "contradicts", "mixed"}
+        if item.get("evidence_relation") in {"supports", "partial", "contradicts", "mixed"}
     ]
     shown = items if verbose else assessed[:3]
     lines = ["# Local sources", "", f"> Claim: {claim}", ""]
     if synthesis and synthesis.get("sources"):
+        summary_heading = (
+            "Cross-paper synthesis"
+            if synthesis.get("paper_count", 0) > 1
+            else "Evidence summary"
+        )
         lines.extend(
-            [
-                "## Cross-paper summary",
-                str(synthesis.get("summary", "")),
-            ]
+            [summary_heading, str(synthesis.get("summary", ""))]
         )
         sources = synthesis.get("sources", [])
         if isinstance(sources, list):
@@ -38,9 +40,9 @@ def render_search(
                     continue
                 relation = str(source.get("relation", ""))
                 key = str(source.get("source_id", ""))
-                if relation not in {"supports", "contradicts", "mixed"} or not key:
+                if relation not in {"supports", "partial", "contradicts", "mixed"} or not key:
                     continue
-                unique_key = (relation, key)
+                unique_key = (relation, key + ":" + str(source.get("page", "")))
                 if unique_key in seen:
                     continue
                 seen.add(unique_key)
@@ -49,7 +51,7 @@ def render_search(
                 by_relation.setdefault(relation, []).append(
                     f"{title}{f', p. {page}' if page else ''}"
                 )
-            for relation in ("supports", "contradicts", "mixed"):
+            for relation in ("supports", "partial", "contradicts", "mixed"):
                 if by_relation.get(relation):
                     lines.append(
                         f"- **{relation.title()}:** " + "; ".join(by_relation[relation])
@@ -62,8 +64,9 @@ def render_search(
                 "Retrieved passages were not sufficient to verify a relation to the claim.",
             ]
         )
-    for index, item in enumerate(shown, start=1):
-        lines.extend(_render_source_card(index, item))
+    paper_groups = _group_by_paper(shown)
+    for index, group in enumerate(paper_groups, start=1):
+        lines.extend(_render_paper_card(index, group))
     if not verbose and len(assessed) > len(shown):
         lines.extend(
             [
@@ -86,6 +89,63 @@ def render_check(items: Iterable[dict]) -> str:
         lines.extend(_render_source_card(number, item, include_claim=True))
         lines.extend(["---", ""])
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _group_by_paper(items: Iterable[dict]) -> list[list[dict]]:
+    groups: dict[str, list[dict]] = {}
+    for item in items:
+        paper_id = item["chunk"].paper.zotero_key
+        groups.setdefault(paper_id, []).append(item)
+    return list(groups.values())
+
+
+def _render_paper_card(number: int, items: list[dict]) -> list[str]:
+    if len(items) == 1:
+        return _render_source_card(number, items[0])
+
+    relations = []
+    for item in items:
+        page = item["chunk"].page
+        location = f"p. {page}" if page is not None else "page unknown"
+        relations.append(f"{item.get('evidence_relation', 'unassessed')} ({location})")
+    representative = {
+        **items[0],
+        "evidence_status": "; ".join(relations),
+        "rationale": "Passage-level assessments are listed below.",
+        "evidence_relation": "passage-level",
+    }
+    lines = _render_source_card(number, representative)
+    for item in items[1:]:
+        chunk = item["chunk"]
+        page = f"p. {chunk.page}" if chunk.page is not None else "page unknown"
+        lines.extend(
+            [
+                f"### Additional passage · {page} · {chunk.section or 'section unknown'}",
+                _highlight_matched_excerpt(
+                    item["evidence"], item.get("matched_excerpt")
+                ),
+                "",
+                f"**Assessment:** {item.get('evidence_relation', 'unassessed')} — "
+                f"{item.get('rationale', '')}",
+            ]
+        )
+        scope = item.get("evidence_scope", {})
+        if isinstance(scope, dict):
+            stated = [
+                f"{label}: {_table_cell(str(scope[key]))}"
+                for key, label in (
+                    ("population", "Population"),
+                    ("unit", "Unit"),
+                    ("outcome", "Outcome"),
+                    ("geography", "Geography"),
+                    ("time", "Time"),
+                )
+                if scope.get(key)
+            ]
+            if stated:
+                lines.extend(["", "**Stated scope:** " + "; ".join(stated)])
+        lines.append("")
+    return lines
 
 
 def _render_source_card(number: int, item: dict, *, include_claim: bool = False) -> list[str]:
@@ -161,17 +221,11 @@ def _render_source_card(number: int, item: dict, *, include_claim: bool = False)
 def _highlight_matched_excerpt(context: str, matched_excerpt: str | None) -> str:
     if not matched_excerpt:
         return context
-    pieces = re.split(r"\s+", matched_excerpt.strip())
-    if not pieces or not pieces[0]:
+    span = find_text_span(context, matched_excerpt)
+    if span is None:
         return context
-    pattern = r"\s+".join(re.escape(piece) for piece in pieces)
-    match = re.search(pattern, context, flags=re.IGNORECASE)
-    if match is None:
-        return context
-    return (
-        f"{context[:match.start()]}⟦highlight⟧{match.group()}⟦/highlight⟧"
-        f"{context[match.end():]}"
-    )
+    start, end = span
+    return f"{context[:start]}⟦highlight⟧{context[start:end]}⟦/highlight⟧{context[end:]}"
 
 
 def _display_title(value: str) -> str:
@@ -186,7 +240,13 @@ def _table_cell(value: str) -> str:
 
 def _sorted_items(items: Iterable[dict]) -> list[dict]:
     enumerated = list(enumerate(items))
-    relation_order = {"supports": 0, "contradicts": 0, "mixed": 1, "insufficient": 2}
+    relation_order = {
+        "supports": 0,
+        "contradicts": 0,
+        "partial": 1,
+        "mixed": 2,
+        "insufficient": 3,
+    }
     ordered = sorted(
         enumerated,
         key=lambda pair: (

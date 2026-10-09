@@ -319,7 +319,7 @@ def _announce_command(args: argparse.Namespace, settings: dict[str, Any]) -> Non
     llm = settings.get("llm", {})
     details = Table.grid(padding=(0, 1))
     details.add_column(style="bright_black")
-    details.add_column(style="white")
+    details.add_column(style="#767676")
     details.add_row("Profile", str(args.profile))
     details.add_row("Embeddings", f"{embedding.get('provider')} · {embedding.get('model')}")
     details.add_row("Reasoning", f"{llm.get('provider')} · {llm.get('model')}")

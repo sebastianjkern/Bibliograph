@@ -238,12 +238,68 @@ def test_cross_paper_synthesis_preserves_relations_and_source_provenance():
     assert synthesis["source_ids_by_relation"] == {
         "supports": ["P1"],
         "contradicts": ["P2"],
+        "partial": [],
         "mixed": [],
         "insufficient": [],
     }
     assert synthesis["scope_variation"]["population"] == ["adults", "children"]
-    assert "contain disagreement" in synthesis["summary"]
+    assert "papers disagree" in synthesis["summary"]
     assert synthesis["sources"][0]["matched_quote"] == items[0]["matched_excerpt"]
+
+
+def test_synthesis_of_multiple_passages_from_one_paper_does_not_claim_cross_paper_variation():
+    from bibliograph.pipeline.evidence_workflow import _synthesize_cross_paper
+
+    paper = Paper("P1", "One paper")
+    items = [
+        {
+            "chunk": Chunk("P1:1", paper, "First result", page=4),
+            "evidence_relation": "supports",
+            "evidence_scope": {"population": "ten markets"},
+        },
+        {
+            "chunk": Chunk("P1:2", paper, "Second result", page=24),
+            "evidence_relation": "supports",
+            "evidence_scope": {"population": "most affected markets"},
+        },
+    ]
+
+    synthesis = _synthesize_cross_paper(items)
+
+    assert synthesis["paper_count"] == 1
+    assert synthesis["passage_count"] == 2
+    assert synthesis["scope_variation"] == {}
+    assert "Evidence from 1 paper across 2 assessed passages" in synthesis["summary"]
+    assert "scope differs across papers" not in synthesis["summary"]
+
+
+def test_search_report_groups_passages_by_paper():
+    paper = Paper("P1", "One paper")
+    claim = {"text": "The treatment changed the outcome."}
+    first = {
+        "claim": claim,
+        "chunk": Chunk("P1:1", paper, "The treatment changed the outcome.", page=4),
+        "score": 0.9,
+        "evidence": "The treatment changed the outcome.",
+        "matched_excerpt": "The treatment changed the outcome.",
+        "evidence_relation": "supports",
+        "evidence_status": "supports",
+        "rationale": "Direct result.",
+    }
+    second = {
+        **first,
+        "chunk": Chunk("P1:2", paper, "The treatment changed the outcome by 4%.", page=5),
+        "score": 0.8,
+        "evidence": "The treatment changed the outcome by 4%.",
+        "matched_excerpt": "The treatment changed the outcome by 4%.",
+    }
+
+    rendered = render_search([first, second])
+
+    assert rendered.count("## 1. One paper") == 1
+    assert "Additional passage · p. 5" in rendered
+    assert "supports (p. 4)" in rendered
+    assert "supports (p. 5)" in rendered
 
 
 def test_search_report_hides_unassessed_passages_unless_verbose():
@@ -280,6 +336,7 @@ def test_search_report_hides_unassessed_passages_unless_verbose():
         [supported],
         synthesis={
             "summary": "Two assessed sources disagree.",
+            "paper_count": 2,
             "sources": [
                 {
                     "source_id": "P1",
@@ -296,7 +353,7 @@ def test_search_report_hides_unassessed_passages_unless_verbose():
             ],
         },
     )
-    assert "## Cross-paper summary" in synthesis_report
+    assert "Cross-paper synthesis" in synthesis_report
     assert "A study, p. 4" in synthesis_report
     assert "Another study, p. 9" in synthesis_report
 

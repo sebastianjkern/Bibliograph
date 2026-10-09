@@ -307,6 +307,31 @@ def test_select_evidence_returns_explicit_contradicting_relation_and_validates_q
     }
 
 
+def test_select_evidence_reports_partial_support_for_population_scope_mismatch():
+    paper = Paper("P1", "Market study")
+    chunk = Chunk("P1:1", paper, "Maize prices rose in ten markets.")
+
+    def complete(_messages, *, json_mode=False):
+        return (
+            '{"relation":"partial","quote":"Maize prices rose in ten markets.",'
+            '"reason":"Market-level evidence does not establish settlement-level effects.",'
+            '"scope":{"population":"ten markets","unit":"market",'
+            '"outcome":"maize prices","geography":"","time":""},'
+            '"quote_role":"finding","quote_directness":"direct"}'
+        )
+
+    result = llm_tasks.select_evidence(
+        "Conflict-affected settlements near roads experienced higher maize prices.",
+        (chunk, 0.8),
+        chunk.text,
+        complete=complete,
+    )
+
+    assert result["relation"] == "partial"
+    assert result["scope"]["unit"] == "market"
+    assert "does not establish settlement-level effects" in result["reason"]
+
+
 def test_select_evidence_downgrades_topical_methods_quote_to_insufficient():
     paper = Paper("P1", "Mechanisms study")
     method_quote = "Our specification regresses nightlights emitted along this road on attacks."

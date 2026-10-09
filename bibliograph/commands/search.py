@@ -88,7 +88,8 @@ def search(
                 refresh=True,
             )
             assessed = sum(
-                item.get("evidence_relation") in {"supports", "contradicts", "mixed"}
+                item.get("evidence_relation")
+                in {"supports", "partial", "contradicts", "mixed"}
                 for item in items
             )
             progress.console.print(
@@ -110,13 +111,14 @@ def search(
 def _assessment_progress_text(detail: str, suffix: str = "") -> Text:
     relation_styles = {
         "support": "bold green",
+        "partial": "bold magenta",
         "contradict": "bold red",
         "mixed": "bold yellow",
         "unresolved": "bold cyan",
     }
     text = Text("Evidence assessment · ", style="dim")
     relation_pattern = re.compile(
-        r"(?P<count>\d+)\s+(?P<relation>support|contradict|mixed|unresolved)\b"
+        r"(?P<count>\d+)\s+(?P<relation>support|partial|contradict|mixed|unresolved)\b"
     )
     cursor = 0
     for match in relation_pattern.finditer(detail):

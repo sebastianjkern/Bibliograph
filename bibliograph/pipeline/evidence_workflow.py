@@ -10,6 +10,7 @@ from langgraph.graph import END, START, StateGraph
 
 from ..domain import Claim, ScoredChunk
 from ..knowledge import QueryRequest
+from ..text_matching import contains_text
 from .retrieval import (
     ContextFor,
     Expand,
@@ -181,12 +182,13 @@ def build_evidence_workflow(
                 value is not None and value.get("relation") == relation
                 for value in assessment_results.values()
             )
-            for relation in ("supports", "contradicts", "mixed", "insufficient")
+            for relation in ("supports", "partial", "contradicts", "mixed", "insufficient")
         }
         report(
             "Assessed evidence · "
             f"{sum(relation_counts.values())} passages · "
             f"{relation_counts['supports']} support, "
+            f"{relation_counts['partial']} partial, "
             f"{relation_counts['contradicts']} contradict, "
             f"{relation_counts['mixed']} mixed, "
             f"{relation_counts['insufficient']} unresolved"
@@ -279,7 +281,13 @@ def build_evidence_workflow(
 
     def finish(state: EvidenceState) -> dict:
         ranked = state.get("ranked_hits", [])
-        relation_priority = {"supports": 0, "contradicts": 0, "mixed": 1, "insufficient": 2}
+        relation_priority = {
+            "supports": 0,
+            "contradicts": 0,
+            "partial": 1,
+            "mixed": 2,
+            "insufficient": 3,
+        }
         ranked = sorted(
             ranked,
             key=lambda hit: (
@@ -340,6 +348,10 @@ def build_evidence_workflow(
                 )
                 item["rationale"] = {
                     "supports": "The source passage supports the claim within its stated scope.",
+                    "partial": (
+                        "The evidence supports part of the claim but does not establish "
+                        "its full scope."
+                    ),
                     "contradicts": (
                         "The source passage contradicts the claim within its stated scope."
                     ),
@@ -443,25 +455,33 @@ def run_evidence_workflow(
 
 
 def _synthesize_cross_paper(items: Sequence[dict]) -> dict[str, object]:
-    """Summarize independently assessed source cards without merging their evidence."""
+    """Summarize passage relations by distinct paper without merging quotations."""
     sources: list[dict[str, object]] = []
     paper_relations: dict[str, set[str]] = {}
-    scope_values: dict[str, set[str]] = {
-        key: set() for key in ("population", "unit", "outcome", "geography", "time")
+    paper_scopes: dict[str, dict[str, set[str]]] = {}
+    relation_passages = {
+        relation: 0
+        for relation in ("supports", "partial", "contradicts", "mixed", "insufficient")
     }
+    scope_keys = ("population", "unit", "outcome", "geography", "time")
     for item in items:
-        relation = item.get("evidence_relation", "not_assessed")
+        relation = str(item.get("evidence_relation", "not_assessed"))
         if relation == "not_assessed":
             continue
         chunk = item["chunk"]
         source_id = chunk.paper.zotero_key
         scope = item.get("evidence_scope", {})
         scope = scope if isinstance(scope, dict) else {}
-        for key in scope_values:
+        paper_scope = paper_scopes.setdefault(
+            source_id, {key: set() for key in scope_keys}
+        )
+        for key in scope_keys:
             value = str(scope.get(key, "")).strip()
             if value:
-                scope_values[key].add(value)
-        paper_relations.setdefault(source_id, set()).add(str(relation))
+                paper_scope[key].add(value)
+        paper_relations.setdefault(source_id, set()).add(relation)
+        if relation in relation_passages:
+            relation_passages[relation] += 1
         sources.append(
             {
                 "source_id": source_id,
@@ -473,37 +493,59 @@ def _synthesize_cross_paper(items: Sequence[dict]) -> dict[str, object]:
                 "scope": scope,
             }
         )
+
     relation_sources = {
         relation: sorted(
             source_id
             for source_id, relations in paper_relations.items()
             if relation in relations
         )
-        for relation in ("supports", "contradicts", "mixed", "insufficient")
+        for relation in relation_passages
     }
-    support_count = len(relation_sources["supports"])
-    contradiction_count = len(relation_sources["contradicts"])
-    mixed_count = len(relation_sources["mixed"])
-    scope_variation = {
-        key: sorted(values) for key, values in scope_values.items() if len(values) > 1
+    scope_variation: dict[str, list[str]] = {}
+    if len(paper_scopes) > 1:
+        for key in scope_keys:
+            values = {
+                value
+                for paper_scope in paper_scopes.values()
+                for value in paper_scope[key]
+            }
+            if len(values) > 1:
+                scope_variation[key] = sorted(values)
+
+    paper_counts = {
+        relation: len(source_ids)
+        for relation, source_ids in relation_sources.items()
     }
     if not sources:
         summary = "No independently assessed source passages were available to synthesize."
     else:
+        paper_word = "paper" if len(paper_relations) == 1 else "papers"
+        passage_word = "passage" if len(sources) == 1 else "passages"
         summary = (
-            f"Across {len(paper_relations)} distinct papers, assessed passages include "
-            f"{support_count} supporting, {contradiction_count} contradicting, and "
-            f"{mixed_count} mixed source(s)."
+            f"Evidence from {len(paper_relations)} {paper_word} across {len(sources)} "
+            f"assessed {passage_word}: {paper_counts['supports']} paper(s) with supporting, "
+            f"{paper_counts['partial']} with partial, {paper_counts['contradicts']} with "
+            f"contradicting, and {paper_counts['mixed']} with mixed evidence."
         )
-        if support_count and contradiction_count:
-            summary += " The assessed sources contain disagreement."
+        within_paper_disagreement = any(
+            "supports" in relations and "contradicts" in relations
+            for relations in paper_relations.values()
+        )
+        if within_paper_disagreement:
+            summary += " Results differ across passages within at least one paper."
+        elif paper_counts["supports"] and paper_counts["contradicts"]:
+            summary += " Assessed papers disagree."
         if scope_variation:
-            summary += " Stated scope varies across sources."
-        summary += " This is a descriptive summary, not a pooled estimate."
+            summary += " Stated scope differs across papers."
+        summary += " This is descriptive, not a pooled estimate."
     return {
         "summary": summary,
+        "paper_count": len(paper_relations),
+        "passage_count": len(sources),
         "sources": sources,
         "source_ids_by_relation": relation_sources,
+        "relation_passages": relation_passages,
         "scope_variation": scope_variation,
     }
 
@@ -515,7 +557,7 @@ def _unresolved_candidate_ids(
         identifier
         for identifier, assessment in assessments.items()
         if assessment is None
-        or assessment.get("relation") in {"insufficient", "mixed"}
+        or assessment.get("relation") in {"partial", "insufficient", "mixed"}
     ]
 
 
@@ -591,14 +633,14 @@ def _normalise_assessment(selection, context: str) -> dict[str, object]:
     relation = str(selection.get("relation", "insufficient"))
     quote_directness = str(selection.get("quote_directness", "unrelated"))
     quote = " ".join(str(selection.get("matched_quote", "")).split())
-    normalized_context = " ".join(context.split())
-    if relation not in {"supports", "contradicts", "mixed"}:
+
+    if relation not in {"supports", "partial", "contradicts", "mixed"}:
         relation = "insufficient"
         quote = ""
     elif (
         quote_directness != "direct"
         or not quote
-        or quote not in normalized_context
+        or not contains_text(context, quote)
     ):
         relation = "insufficient"
         quote = ""

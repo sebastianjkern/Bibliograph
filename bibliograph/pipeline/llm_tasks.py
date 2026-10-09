@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping, Sequence
 from inspect import signature
 
 from ..domain import ScoredChunk, citation_label
+from ..text_matching import contains_text
 
 Complete = Callable[..., str]
 ProgressUpdate = Callable[[str], None]
@@ -96,7 +97,7 @@ _EVIDENCE_SCHEMA: dict[str, object] = {
     "properties": {
         "relation": {
             "type": "string",
-            "enum": ["supports", "contradicts", "mixed", "insufficient"],
+            "enum": ["supports", "partial", "contradicts", "mixed", "insufficient"],
         },
         "quote": {"type": "string"},
         "reason": {"type": "string"},
@@ -506,7 +507,12 @@ def select_evidence(
             "role": "system",
             "content": (
                 "Assess the relation between CLAIM and CONTEXT using only the source text. "
-                "Return relation as supports, contradicts, mixed, or insufficient. Choose the "
+                "Return relation as supports, partial, contradicts, mixed, or insufficient. "
+                "Use partial when the passage directly supports a narrower claim but does not "
+                "establish a required population, unit, outcome, geographic, or time scope; for "
+                "example, market-level results do not by themselves establish settlement-level "
+                "effects. Use supports only when the evidence establishes the claim at its stated "
+                "scope. Choose the "
                 "shortest exact quote that directly states the evidence relevant to the claim. "
                 "Prefer an explicit finding/result sentence over a nearby methods, data-source, "
                 "caption, or interpretation sentence when the claim is about a result. Do not "
@@ -537,7 +543,7 @@ def select_evidence(
     ]
     payload = _json_object(_complete_json(complete, messages, _EVIDENCE_SCHEMA))
     relation = str(payload.get("relation", "insufficient"))
-    if relation not in {"supports", "contradicts", "mixed", "insufficient"}:
+    if relation not in {"supports", "partial", "contradicts", "mixed", "insufficient"}:
         relation = "insufficient"
     quote = str(payload.get("quote", "")).strip()
     quote_directness = str(payload.get("quote_directness", "unrelated"))
@@ -630,8 +636,7 @@ def _json_object(content: str) -> dict:
 
 def _is_valid_quote(quote: str, context: str) -> bool:
     normalized_quote = " ".join(quote.split()).strip()
-    normalized_context = " ".join(context.split())
-    if not normalized_quote or normalized_quote not in normalized_context:
+    if not normalized_quote or not contains_text(context, normalized_quote):
         return False
     if _is_metadata_text(normalized_quote):
         return False
