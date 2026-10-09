@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from bibliograph.cli import _disabled_llm_stages, _settings_overrides, build_parser, main
-from bibliograph.commands.search import _stage_progress
+from bibliograph.commands.search import _assessment_progress_text, _progress_description
 
 
 def test_cli_exposes_the_four_primary_commands():
@@ -48,12 +48,40 @@ def test_help_reports_the_resolved_provider_configuration(monkeypatch, capsys):
     assert "rerank, evidence" in output
 
 
-def test_search_progress_tracks_async_batch_completion_fractionally():
-    assert _stage_progress("Expanding queries · 2/4 complete") == 0.5
-    assert _stage_progress("Embedding expanded queries") == 2.0
-    assert _stage_progress("Retrieving evidence · 3/5 queries") == 2.4
-    assert _stage_progress("Reranking candidates · 2/4 batches complete") == 3.5
-    assert _stage_progress("Enriching finalists · 3/4 complete") == 4.75
+def test_assessment_progress_colors_relations_and_keeps_other_text_neutral():
+    progress = _assessment_progress_text(
+        "10 passages · 6 support, 1 contradict, 2 mixed, 1 unresolved",
+        " · round 1 · 4 passages updated",
+    )
+
+    assert "10 passages" in progress.plain
+    assert "round 1" in progress.plain
+    styled_segments = [
+        (progress.plain[span.start : span.end], span.style)
+        for span in progress.spans
+    ]
+    assert any(segment == "6" and "green" in str(style) for segment, style in styled_segments)
+    assert any(segment == "1" and "red" in str(style) for segment, style in styled_segments)
+    assert any(segment == "2" and "yellow" in str(style) for segment, style in styled_segments)
+    assert any(segment == "1" and "cyan" in str(style) for segment, style in styled_segments)
+    assert any(
+        "10 passages" in segment and "dim" in str(style)
+        for segment, style in styled_segments
+    )
+
+
+def test_search_progress_uses_concise_workflow_state_labels():
+    assert _progress_description("Plan query · initial claim search") == "Searching the claim"
+    assert _progress_description("Retrieved candidates · 36 unique · 4 query variant(s)") == (
+        "Retrieved · 36 unique · 4 query variant(s)"
+    )
+    assert _progress_description(
+        "Context extension · round 1 · 5 passage(s) updated"
+    ) == "Extending local context · round 1 · 5 passage(s) updated"
+    assert _progress_description(
+        "Query extension · round 2 · 4 new queries · assessed evidence ledger"
+    ) == "Planning follow-up queries · round 2 · 4 new queries · assessed evidence ledger"
+
 
 
 def test_cli_keeps_read_workflow_shims_for_one_release():

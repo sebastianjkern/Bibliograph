@@ -213,6 +213,39 @@ def test_only_top_ten_distinct_articles_are_enriched_after_reranking():
     assert "P1" not in enriched
 
 
+def test_cross_paper_synthesis_preserves_relations_and_source_provenance():
+    from bibliograph.pipeline.evidence_workflow import _synthesize_cross_paper
+
+    paper_a = Paper("P1", "Study A")
+    paper_b = Paper("P2", "Study B")
+    items = [
+        {
+            "chunk": Chunk("P1:1", paper_a, "Treatment increased the outcome.", page=3),
+            "evidence_relation": "supports",
+            "matched_excerpt": "Treatment increased the outcome.",
+            "evidence_scope": {"population": "adults", "unit": "individual"},
+        },
+        {
+            "chunk": Chunk("P2:1", paper_b, "Treatment did not change the outcome.", page=8),
+            "evidence_relation": "contradicts",
+            "matched_excerpt": "Treatment did not change the outcome.",
+            "evidence_scope": {"population": "children", "unit": "school"},
+        },
+    ]
+
+    synthesis = _synthesize_cross_paper(items)
+
+    assert synthesis["source_ids_by_relation"] == {
+        "supports": ["P1"],
+        "contradicts": ["P2"],
+        "mixed": [],
+        "insufficient": [],
+    }
+    assert synthesis["scope_variation"]["population"] == ["adults", "children"]
+    assert "contain disagreement" in synthesis["summary"]
+    assert synthesis["sources"][0]["matched_quote"] == items[0]["matched_excerpt"]
+
+
 def test_search_report_hides_unassessed_passages_unless_verbose():
     paper = Paper("P1", "A study")
     supported = {
@@ -242,6 +275,30 @@ def test_search_report_hides_unassessed_passages_unless_verbose():
     assert "The study aims to evaluate treatment." in verbose_report
     assert "Retrieval relevance" in default_report
     assert "Rerank support" not in default_report
+
+    synthesis_report = render_search(
+        [supported],
+        synthesis={
+            "summary": "Two assessed sources disagree.",
+            "sources": [
+                {
+                    "source_id": "P1",
+                    "title": "A study",
+                    "page": 4,
+                    "relation": "supports",
+                },
+                {
+                    "source_id": "P2",
+                    "title": "Another study",
+                    "page": 9,
+                    "relation": "contradicts",
+                },
+            ],
+        },
+    )
+    assert "## Cross-paper summary" in synthesis_report
+    assert "A study, p. 4" in synthesis_report
+    assert "Another study, p. 9" in synthesis_report
 
 
 def test_rendered_references_are_sorted_by_support_score():
@@ -324,7 +381,7 @@ def test_explain_strips_label_prefixes_from_llm_output():
     assert content == "The evidence directly addresses the claim."
 
 
-def test_refine_queries_uses_excerpt_terms_without_replacing_original_claim():
+def test_refine_queries_targets_gaps_in_assessed_evidence_ledger():
     from bibliograph.pipeline.llm_tasks import refine_queries
 
     prompts = []
@@ -335,7 +392,10 @@ def test_refine_queries_uses_excerpt_terms_without_replacing_original_claim():
 
     queries = refine_queries(
         "Treatment changed an outcome.",
-        ["The study estimates a treatment effect for the measured outcome."],
+        [
+            "Source A, page 2: insufficient. Assessment gap/reason: population is unclear. "
+            "Retrieved context: treatment effect for the measured outcome."
+        ],
         complete=complete,
     )
 
@@ -343,8 +403,10 @@ def test_refine_queries_uses_excerpt_terms_without_replacing_original_claim():
     assert prompts[0][1] is True
     prompt = "\\n".join(message["content"] for message in prompts[0][0])
     assert "Treatment changed an outcome." in prompt
-    assert "The study estimates a treatment effect" in prompt
-    assert "excerpts are vocabulary sources, not proof" in prompt
+    assert "Assessment gap/reason: population is unclear" in prompt
+    assert "ASSESSED EVIDENCE LEDGER" in prompt
+    assert "Do not generate queries from general associations" in prompt
+    assert "missing population" in prompt
 
 
 def test_langgraph_search_refines_queries_from_retrieved_context():
@@ -386,7 +448,12 @@ def test_langgraph_search_refines_queries_from_retrieved_context():
                 "The treatment increased the measured outcome.",
                 "The excerpt reports a finding.",
             )
-        return None
+        return {
+            "relation": "insufficient",
+            "matched_quote": "",
+            "reason": "The population and unit of analysis are unclear.",
+            "scope": {"population": "", "unit": "", "outcome": "", "geography": "", "time": ""},
+        }
 
     result = search_claim(
         {"text": "Claim about treatment and outcome", "citation_keys": ()},
@@ -406,7 +473,11 @@ def test_langgraph_search_refines_queries_from_retrieved_context():
     assert all(limit == 20 and include_trace for _request, limit, include_trace in requests)
     assert refinements[0][0] == "Claim about treatment and outcome"
     assert "Adjacent context clarifies the terminology" in refinements[0][1][0]
+    assert "Assessment gap/reason: The population and unit of analysis are unclear" in refinements[0][1][0]
     assert result["refinement_rounds"] == 1
+    assert result["refinement_trace"][0]["queries"] == [
+        "treatment effect on measured outcome"
+    ]
     assert result["candidate_queries"][followup.chunk_id] == [
         "treatment effect on measured outcome"
     ]
@@ -431,6 +502,94 @@ def test_langgraph_search_refines_queries_from_retrieved_context():
     assert "does not establish" in unverified_item["rationale"]
 
 
+def test_claim_only_expansion_is_fallback_when_initial_retrieval_has_no_candidates():
+    from bibliograph.knowledge import RetrievalResult
+
+    queries = []
+
+    class Backend:
+        def retrieve_request(self, request, *, limit, include_trace):
+            queries.append(request.text)
+            return RetrievalResult(hits=(), score_details={})
+
+    expanded = []
+
+    def expand(claim):
+        expanded.append(claim)
+        return ["treatment outcome measured in clinics"]
+
+    result = search_claim(
+        {"text": "Treatment improved clinic outcomes.", "citation_keys": ()},
+        backend=Backend(),
+        expand=expand,
+        refine=lambda *_args: [],
+    )
+
+    assert expanded == ["Treatment improved clinic outcomes."]
+    assert queries == [
+        "Treatment improved clinic outcomes.",
+        "treatment outcome measured in clinics",
+    ]
+    assert result["refinement_trace"][0]["planning_basis"] == (
+        "no initial candidates; claim-only fallback expansion"
+    )
+
+
+def test_langgraph_extends_local_context_before_query_refinement():
+    from bibliograph.knowledge import RetrievalResult
+
+    paper = Paper("P1", "Context extension study")
+    chunk = Chunk("P1:1:0", paper, "The treatment was assessed.", section="Results")
+    context_windows = []
+
+    class Backend:
+        def retrieve_request(self, _request, *, limit, include_trace):
+            return RetrievalResult(hits=((chunk, 0.8),), score_details={})
+
+        def context_for(self, _chunk, *, window=1):
+            context_windows.append(window)
+            if window == 1:
+                return "The treatment was assessed."
+            return "In the sampled clinics, the treatment increased the measured outcome."
+
+    def select(_claim, _hit, context):
+        quote = "In the sampled clinics, the treatment increased the measured outcome."
+        if quote in context:
+            return {
+                "relation": "supports",
+                "matched_quote": quote,
+                "reason": "The passage reports the outcome for the sampled clinics.",
+                "scope": {"population": "sampled clinics", "unit": "clinic", "outcome": "measured outcome", "geography": "", "time": ""},
+                "quote_role": "finding",
+                "quote_directness": "direct",
+            }
+        return {
+            "relation": "insufficient",
+            "matched_quote": "",
+            "reason": "The result and population are not stated in this chunk.",
+            "scope": {},
+        }
+
+    result = search_claim(
+        {"text": "The treatment increased the measured outcome in clinics.", "citation_keys": ()},
+        backend=Backend(),
+        expand=lambda _claim: [],
+        refine=lambda *_args: [],
+        rerank=lambda _claim, hits: list(hits),
+        select_evidence=select,
+    )
+
+    item = result["items"][0]
+    assert context_windows == [1, 2]
+    assert item["evidence_relation"] == "supports"
+    assert item["matched_excerpt"] == (
+        "In the sampled clinics, the treatment increased the measured outcome."
+    )
+    assert item["evidence_scope"]["population"] == "sampled clinics"
+    assert result["context_windows"][chunk.chunk_id] == 2
+    assert result["refinement_rounds"] == 0
+
+
 def test_workflow_rejects_assessment_quotes_not_found_in_context():
     from bibliograph.pipeline.evidence_workflow import _normalise_assessment
 
@@ -439,6 +598,7 @@ def test_workflow_rejects_assessment_quotes_not_found_in_context():
             "relation": "supports",
             "matched_quote": "Invented supporting sentence.",
             "reason": "The model claimed support.",
+            "quote_directness": "direct",
         },
         "The source only describes its methodology.",
     )
@@ -504,27 +664,18 @@ def test_knowledge_backend_receives_neutral_query_and_returns_trace():
     assert request.text == "Road quality affects market access."
     assert all(not request.hypotheses for request, _limit, _trace in requests)
     assert [request.text for request, _limit, _trace in requests] == [
-        "Road quality affects market access.",
-        "Transport infrastructure and trade",
+        "Road quality affects market access."
     ]
     assert limit == 20
     assert include_trace is True
-    assert len(result["query_traces"]) == 2
-    assert result["retrieval_trace"][0]["trace"] is trace
-    partial_results = next(
-        message for message in progress_messages if message.startswith("Search subtask results:")
+    assert len(result["query_traces"]) == 1
+    assert result["retrieval_trace"] is trace
+    retrieval_update = next(
+        message for message in progress_messages if message.startswith("Retrieved candidates ·")
     )
-    assert "\\n" not in partial_results
-    assert "Search pass: 2 query variant(s)" in partial_results
-    assert "Alternative:" not in partial_results
-    assert "Road study" in partial_results
-    assert "relevance 0.800" in partial_results
-    assert "Road quality improves market access." in partial_results
-    assert "started from 1 indexed passages" in partial_results
-    assert sum(
-        message.startswith("Search subtask results:") for message in progress_messages
-    ) == 1
-    assert "P1:1:0" not in partial_results
+    assert retrieval_update == "Retrieved candidates · 1 unique · 1 query variant(s)"
+    assert all(not message.startswith("Search subtask results:") for message in progress_messages)
+    assert all("graph expansion followed" not in message for message in progress_messages)
 
 
 def test_backend_search_honors_requested_result_limit():

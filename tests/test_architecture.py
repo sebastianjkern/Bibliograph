@@ -148,7 +148,8 @@ def test_one_fake_chat_runtime_serves_all_llm_tasks():
             return (
                 '{"relation":"supports","quote":"Exact supporting sentence.",'
                 '"reason":"Direct support.","scope":{"population":"sample",'
-                '"unit":"market","outcome":"result","geography":"", "time":""}}'
+                '"unit":"market","outcome":"result","geography":"", "time":""},'
+                '"quote_role":"finding","quote_directness":"direct"}'
             )
         explanation_prompts.append(messages)
         return "Direct support."
@@ -170,6 +171,8 @@ def test_one_fake_chat_runtime_serves_all_llm_tasks():
             "geography": "",
             "time": "",
         },
+        "quote_role": "finding",
+        "quote_directness": "direct",
     }
     assert llm_tasks.explain("claim", chunk.text, complete=complete) == "Direct support."
     explanation_prompt = "\n".join(message["content"] for message in explanation_prompts[0])
@@ -277,7 +280,8 @@ def test_select_evidence_returns_explicit_contradicting_relation_and_validates_q
             '{"relation":"contradicts","quote":"The intervention had no effect '
             'on the measured outcome.","reason":"The reported direction conflicts.",'
             '"scope":{"population":"","unit":"","outcome":"measured outcome",'
-            '"geography":"","time":""}}'
+            '"geography":"","time":""},"quote_role":"finding",'
+            '"quote_directness":"direct"}'
         )
 
     result = llm_tasks.select_evidence(
@@ -298,7 +302,41 @@ def test_select_evidence_returns_explicit_contradicting_relation_and_validates_q
             "geography": "",
             "time": "",
         },
+        "quote_role": "finding",
+        "quote_directness": "direct",
     }
+
+
+def test_select_evidence_downgrades_topical_methods_quote_to_insufficient():
+    paper = Paper("P1", "Mechanisms study")
+    method_quote = "Our specification regresses nightlights emitted along this road on attacks."
+    context = (
+        "Conflict has a statistically significant effect on maize prices. "
+        f"{method_quote}"
+    )
+    chunk = Chunk("P1:1", paper, context)
+    prompts = []
+
+    def complete(messages, *, json_mode=False):
+        prompts.append(messages)
+        return (
+            '{"relation":"supports","quote":"' + method_quote + '",'
+            '"reason":"The passage mentions the route.","scope":{},'
+            '"quote_role":"method","quote_directness":"contextual"}'
+        )
+
+    result = llm_tasks.select_evidence(
+        "Conflict along roads increases maize prices.",
+        (chunk, 0.8),
+        context,
+        complete=complete,
+    )
+
+    assert result["relation"] == "insufficient"
+    assert result["matched_quote"] == ""
+    prompt = prompts[0][0]["content"]
+    assert "Prefer an explicit finding/result sentence" in prompt
+    assert "Do not select text merely because it mentions related entities" in prompt
 
 
 def test_select_evidence_rejects_publisher_address_quotes():
@@ -310,7 +348,7 @@ def test_select_evidence_rejects_publisher_address_quotes():
             '{"relation":"supports","quote":"Published by Blackwell Publishing Ltd, '
             '9600 Garsington Road, Oxford OX4 2DQ, UK.","reason":"Direct support.",'
             '"scope":{"population":"","unit":"","outcome":"","geography":"",'
-            '"time":""}}'
+            '"time":""},"quote_role":"other","quote_directness":"direct"}'
         )
 
     assessment = llm_tasks.select_evidence(

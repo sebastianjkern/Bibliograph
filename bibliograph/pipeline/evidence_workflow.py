@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from inspect import signature
 from typing import Any, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
@@ -37,6 +38,8 @@ class EvidenceState(TypedDict):
     contexts: dict[str, str]
     ranked_hits: list[ScoredChunk]
     assessment_results: dict[str, dict[str, object] | None]
+    context_windows: dict[str, int]
+    refinement_trace: list[dict[str, object]]
     result: dict
 
 
@@ -55,10 +58,11 @@ def build_evidence_workflow(
     top_only: bool,
     one_per_paper: bool,
     max_refinements: int = 1,
+    max_context_extensions: int = 1,
 ):
     """Build a bounded retrieve-context-assess-refine LangGraph workflow."""
-    if max_refinements < 0:
-        raise ValueError("max_refinements cannot be negative")
+    if max_refinements < 0 or max_context_extensions < 0:
+        raise ValueError("workflow iteration limits cannot be negative")
 
     context_lookup = _context_lookup(backend)
     retrieve_request = getattr(backend, "retrieve_request", None)
@@ -69,9 +73,8 @@ def build_evidence_workflow(
 
     def plan(state: EvidenceState) -> dict:
         claim_text = state["claim"]["text"].strip()
-        alternatives = expand(claim_text) if expand is not None else []
-        queries = _unique_queries(claim_text, alternatives, limit=8)
-        report(f"Plan query · {len(queries) - 1} alternatives ready")
+        queries = [claim_text]
+        report("Plan query · initial claim search")
         return {
             "pending_queries": queries,
             "queries": queries,
@@ -83,6 +86,8 @@ def build_evidence_workflow(
             "assessment_results": {},
             "contexts": {},
             "ranked_hits": [],
+            "context_windows": {},
+            "refinement_trace": [],
         }
 
     def retrieve(state: EvidenceState) -> dict:
@@ -147,12 +152,14 @@ def build_evidence_workflow(
 
     def gather_context(state: EvidenceState) -> dict:
         contexts = dict(state.get("contexts", {}))
+        context_windows = dict(state.get("context_windows", {}))
         ranked = sorted(state["candidates"].values(), key=lambda hit: hit[1], reverse=True)
         for chunk, _score in ranked[: max(5, limit * 2)]:
             if chunk.chunk_id not in contexts:
                 contexts[chunk.chunk_id] = context_lookup(chunk)
+                context_windows[chunk.chunk_id] = 1
         report(f"Gathered context · {len(contexts)} passages")
-        return {"contexts": contexts}
+        return {"contexts": contexts, "context_windows": context_windows}
 
     def assess(state: EvidenceState) -> dict:
         candidates = list(state["candidates"].values())
@@ -169,37 +176,77 @@ def build_evidence_workflow(
                 context = state["contexts"].get(chunk.chunk_id, chunk.text)
                 selected = select_evidence(state["claim"]["text"], hit, context)
                 assessment_results[chunk.chunk_id] = _normalise_assessment(selected, context)
-        assessed_count = sum(
-            value is not None and value.get("relation") in {"supports", "contradicts", "mixed"}
-            for value in assessment_results.values()
+        relation_counts = {
+            relation: sum(
+                value is not None and value.get("relation") == relation
+                for value in assessment_results.values()
+            )
+            for relation in ("supports", "contradicts", "mixed", "insufficient")
+        }
+        report(
+            "Assessed evidence · "
+            f"{sum(relation_counts.values())} passages · "
+            f"{relation_counts['supports']} support, "
+            f"{relation_counts['contradicts']} contradict, "
+            f"{relation_counts['mixed']} mixed, "
+            f"{relation_counts['insufficient']} unresolved"
         )
-        report(f"Assessed evidence · {assessed_count} related passages")
         return {"ranked_hits": ranked, "assessment_results": assessment_results}
 
     def route_after_assessment(state: EvidenceState) -> str:
+        unresolved = _unresolved_candidate_ids(state["assessment_results"])
+        if not unresolved:
+            if (
+                not state["candidates"]
+                and (refine is not None or expand is not None)
+                and state["refinement_round"] < max_refinements
+            ):
+                return "refine"
+            return "finish"
         if any(
-            value is not None and value.get("relation") != "insufficient"
-            for value in state["assessment_results"].values()
+            state["context_windows"].get(identifier, 1) < 1 + max_context_extensions
+            for identifier in unresolved
         ):
-            return "finish"
-        if refine is None:
-            return "finish"
-        if state["refinement_round"] >= max_refinements:
-            return "finish"
-        return "refine"
+            return "extend_context"
+        if refine is not None and state["refinement_round"] < max_refinements:
+            return "refine"
+        return "finish"
+
+    def extend_context(state: EvidenceState) -> dict:
+        contexts = dict(state["contexts"])
+        context_windows = dict(state["context_windows"])
+        unresolved = _unresolved_candidate_ids(state["assessment_results"])
+        candidates = state["candidates"]
+        extended = 0
+        for identifier in unresolved:
+            current_window = context_windows.get(identifier, 1)
+            if current_window >= 1 + max_context_extensions:
+                continue
+            chunk = candidates[identifier][0]
+            next_window = current_window + 1
+            expanded = _context_for_window(backend, chunk, next_window, contexts[identifier])
+            contexts[identifier] = expanded
+            context_windows[identifier] = next_window
+            extended += int(expanded != state["contexts"][identifier])
+        extension_round = max(context_windows.values(), default=1) - 1
+        report(
+            f"Context extension · round {extension_round} · "
+            f"{extended} passage(s) updated"
+        )
+        return {"contexts": contexts, "context_windows": context_windows}
 
     def refine_queries(state: EvidenceState) -> dict:
-        excerpts = []
-        ranked = state.get("ranked_hits", [])
-        for chunk, _score in ranked[:5]:
-            context = state["contexts"].get(chunk.chunk_id, chunk.text)
-            excerpts.append(context)
-        if refine is None:
-            return {
-                "pending_queries": [],
-                "refinement_round": state["refinement_round"] + 1,
-            }
-        proposed = refine(state["claim"]["text"], excerpts)
+        ledger = _evidence_ledger(state)
+        claim_text = state["claim"]["text"]
+        if ledger and refine is not None:
+            proposed = refine(claim_text, ledger)
+            planning_basis = "assessed evidence ledger"
+        elif not ledger and not state["candidates"] and expand is not None:
+            proposed = expand(claim_text)
+            planning_basis = "no initial candidates; claim-only fallback expansion"
+        else:
+            proposed = []
+            planning_basis = "no actionable evidence gap"
         queries = _unique_queries(
             state["claim"]["text"],
             [*state["queries"], *proposed],
@@ -207,11 +254,24 @@ def build_evidence_workflow(
         )
         already_searched = {query.casefold() for query in state["queries"]}
         pending = [query for query in queries if query.casefold() not in already_searched]
-        report(f"Refined queries · {len(pending)} new terms")
+        refinement_trace = list(state.get("refinement_trace", []))
+        refinement_trace.append(
+            {
+                "round": state["refinement_round"] + 1,
+                "evidence_ledger": ledger,
+                "queries": pending,
+                "planning_basis": planning_basis,
+            }
+        )
+        report(
+            f"Query extension · round {state['refinement_round'] + 1} · "
+            f"{len(pending)} new queries · {planning_basis}"
+        )
         return {
             "queries": queries,
             "pending_queries": pending,
             "refinement_round": state["refinement_round"] + 1,
+            "refinement_trace": refinement_trace,
         }
 
     def route_after_refinement(state: EvidenceState) -> str:
@@ -275,6 +335,9 @@ def build_evidence_workflow(
                 item["evidence_scope"] = (
                     assessment.get("scope", {}) if assessment else {}
                 )
+                item["quote_role"] = (
+                    assessment.get("quote_role", "other") if assessment else "other"
+                )
                 item["rationale"] = {
                     "supports": "The source passage supports the claim within its stated scope.",
                     "contradicts": (
@@ -294,10 +357,14 @@ def build_evidence_workflow(
         result = {
             **base,
             "items": items,
+            "synthesis": _synthesize_cross_paper(items),
             "retrieval_trace": retrieval_trace,
             "query_traces": traces,
             "candidate_queries": state["candidate_queries"],
             "refinement_rounds": state["refinement_round"],
+            "refinement_trace": state["refinement_trace"],
+            "evidence_ledger": _evidence_ledger(state),
+            "context_windows": dict(state["context_windows"]),
         }
         report("Evidence workflow complete")
         return {"result": result}
@@ -307,6 +374,7 @@ def build_evidence_workflow(
     graph.add_node("retrieve", retrieve)
     graph.add_node("context", gather_context)
     graph.add_node("assess", assess)
+    graph.add_node("extend_context", extend_context)
     graph.add_node("refine", refine_queries)
     graph.add_node("finish", finish)
     graph.add_edge(START, "plan")
@@ -316,8 +384,13 @@ def build_evidence_workflow(
     graph.add_conditional_edges(
         "assess",
         route_after_assessment,
-        {"refine": "refine", "finish": "finish"},
+        {
+            "extend_context": "extend_context",
+            "refine": "refine",
+            "finish": "finish",
+        },
     )
+    graph.add_edge("extend_context", "assess")
     graph.add_conditional_edges(
         "refine",
         route_after_refinement,
@@ -343,6 +416,7 @@ def run_evidence_workflow(
     top_only: bool = False,
     one_per_paper: bool = False,
     max_refinements: int = 1,
+    max_context_extensions: int = 1,
 ) -> dict:
     """Execute iterative retrieval and return the existing search result shape."""
     text = claim["text"].strip()
@@ -362,9 +436,133 @@ def run_evidence_workflow(
         top_only=top_only,
         one_per_paper=one_per_paper,
         max_refinements=max_refinements,
+        max_context_extensions=max_context_extensions,
     )
     initial_state = cast(EvidenceState, {"claim": claim})
     return graph.invoke(initial_state)["result"]
+
+
+def _synthesize_cross_paper(items: Sequence[dict]) -> dict[str, object]:
+    """Summarize independently assessed source cards without merging their evidence."""
+    sources: list[dict[str, object]] = []
+    paper_relations: dict[str, set[str]] = {}
+    scope_values: dict[str, set[str]] = {
+        key: set() for key in ("population", "unit", "outcome", "geography", "time")
+    }
+    for item in items:
+        relation = item.get("evidence_relation", "not_assessed")
+        if relation == "not_assessed":
+            continue
+        chunk = item["chunk"]
+        source_id = chunk.paper.zotero_key
+        scope = item.get("evidence_scope", {})
+        scope = scope if isinstance(scope, dict) else {}
+        for key in scope_values:
+            value = str(scope.get(key, "")).strip()
+            if value:
+                scope_values[key].add(value)
+        paper_relations.setdefault(source_id, set()).add(str(relation))
+        sources.append(
+            {
+                "source_id": source_id,
+                "title": chunk.paper.title,
+                "page": chunk.page,
+                "relation": relation,
+                "matched_quote": item.get("matched_excerpt"),
+                "quote_role": item.get("quote_role", "other"),
+                "scope": scope,
+            }
+        )
+    relation_sources = {
+        relation: sorted(
+            source_id
+            for source_id, relations in paper_relations.items()
+            if relation in relations
+        )
+        for relation in ("supports", "contradicts", "mixed", "insufficient")
+    }
+    support_count = len(relation_sources["supports"])
+    contradiction_count = len(relation_sources["contradicts"])
+    mixed_count = len(relation_sources["mixed"])
+    scope_variation = {
+        key: sorted(values) for key, values in scope_values.items() if len(values) > 1
+    }
+    if not sources:
+        summary = "No independently assessed source passages were available to synthesize."
+    else:
+        summary = (
+            f"Across {len(paper_relations)} distinct papers, assessed passages include "
+            f"{support_count} supporting, {contradiction_count} contradicting, and "
+            f"{mixed_count} mixed source(s)."
+        )
+        if support_count and contradiction_count:
+            summary += " The assessed sources contain disagreement."
+        if scope_variation:
+            summary += " Stated scope varies across sources."
+        summary += " This is a descriptive summary, not a pooled estimate."
+    return {
+        "summary": summary,
+        "sources": sources,
+        "source_ids_by_relation": relation_sources,
+        "scope_variation": scope_variation,
+    }
+
+
+def _unresolved_candidate_ids(
+    assessments: dict[str, dict[str, object] | None],
+) -> list[str]:
+    return [
+        identifier
+        for identifier, assessment in assessments.items()
+        if assessment is None
+        or assessment.get("relation") in {"insufficient", "mixed"}
+    ]
+
+
+def _evidence_ledger(state: EvidenceState) -> list[str]:
+    ledger = []
+    ranked = state.get("ranked_hits", [])
+    for chunk, _score in ranked[:8]:
+        assessment = state["assessment_results"].get(chunk.chunk_id) or {}
+        relation = str(assessment.get("relation", "not_assessed"))
+        quote = str(assessment.get("matched_quote", ""))
+        reason = str(assessment.get("reason", ""))
+        scope = assessment.get("scope", {})
+        scope_text = ""
+        if isinstance(scope, dict):
+            stated = [f"{key}={value}" for key, value in scope.items() if value]
+            if stated:
+                scope_text = "; stated scope: " + ", ".join(stated)
+        context = " ".join(state["contexts"].get(chunk.chunk_id, chunk.text).split())
+        if len(context) > 700:
+            context = context[:697].rsplit(" ", 1)[0] + "..."
+        page = f"p. {chunk.page}" if chunk.page is not None else "page unknown"
+        parts = [
+            f"Source {chunk.paper.title}, {page}, chunk {chunk.chunk_id}: {relation}.",
+        ]
+        if quote:
+            parts.append(f"Matched source text: {quote}")
+        if reason:
+            parts.append(f"Assessment gap/reason: {reason}")
+        if scope_text:
+            parts.append(scope_text.lstrip("; "))
+        parts.append(f"Retrieved context: {context}")
+        ledger.append(" ".join(parts))
+    return ledger
+
+
+def _context_for_window(backend: Any, chunk, window: int, fallback: str) -> str:
+    context_for = getattr(backend, "context_for", None)
+    if not callable(context_for):
+        return fallback
+    try:
+        supports_window = "window" in signature(context_for).parameters
+    except (TypeError, ValueError):
+        supports_window = False
+    if not supports_window:
+        return fallback
+    expanded = context_for(chunk, window=window)
+    return expanded if isinstance(expanded, str) and expanded.strip() else fallback
 
 
 def _normalise_assessment(selection, context: str) -> dict[str, object]:
@@ -381,6 +579,7 @@ def _normalise_assessment(selection, context: str) -> dict[str, object]:
             "relation": "supports",
             "matched_quote": quote,
             "reason": reason,
+            "quote_directness": "direct",
         }
     if not isinstance(selection, dict):
         return {
@@ -390,12 +589,17 @@ def _normalise_assessment(selection, context: str) -> dict[str, object]:
             "scope": {},
         }
     relation = str(selection.get("relation", "insufficient"))
+    quote_directness = str(selection.get("quote_directness", "unrelated"))
     quote = " ".join(str(selection.get("matched_quote", "")).split())
     normalized_context = " ".join(context.split())
     if relation not in {"supports", "contradicts", "mixed"}:
         relation = "insufficient"
         quote = ""
-    elif not quote or quote not in normalized_context:
+    elif (
+        quote_directness != "direct"
+        or not quote
+        or quote not in normalized_context
+    ):
         relation = "insufficient"
         quote = ""
     raw_scope = selection.get("scope", {})
@@ -404,6 +608,8 @@ def _normalise_assessment(selection, context: str) -> dict[str, object]:
         "matched_quote": quote,
         "reason": str(selection.get("reason", "")),
         "scope": raw_scope if isinstance(raw_scope, dict) else {},
+        "quote_role": str(selection.get("quote_role", "other")),
+        "quote_directness": quote_directness,
     }
 
 

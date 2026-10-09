@@ -7,7 +7,11 @@ from .domain import citation_label
 
 
 def render_search(
-    items: Iterable[dict], *, claim: str | None = None, verbose: bool = False
+    items: Iterable[dict],
+    *,
+    claim: str | None = None,
+    verbose: bool = False,
+    synthesis: dict | None = None,
 ) -> str:
     items = _sorted_items(items)
     claim = items[0]["claim"]["text"] if items else (claim or "")
@@ -18,6 +22,39 @@ def render_search(
     ]
     shown = items if verbose else assessed[:3]
     lines = ["# Local sources", "", f"> Claim: {claim}", ""]
+    if synthesis and synthesis.get("sources"):
+        lines.extend(
+            [
+                "## Cross-paper summary",
+                str(synthesis.get("summary", "")),
+            ]
+        )
+        sources = synthesis.get("sources", [])
+        if isinstance(sources, list):
+            by_relation: dict[str, list[str]] = {}
+            seen: set[tuple[str, str]] = set()
+            for source in sources:
+                if not isinstance(source, dict):
+                    continue
+                relation = str(source.get("relation", ""))
+                key = str(source.get("source_id", ""))
+                if relation not in {"supports", "contradicts", "mixed"} or not key:
+                    continue
+                unique_key = (relation, key)
+                if unique_key in seen:
+                    continue
+                seen.add(unique_key)
+                title = _display_title(str(source.get("title", key)))
+                page = source.get("page")
+                by_relation.setdefault(relation, []).append(
+                    f"{title}{f', p. {page}' if page else ''}"
+                )
+            for relation in ("supports", "contradicts", "mixed"):
+                if by_relation.get(relation):
+                    lines.append(
+                        f"- **{relation.title()}:** " + "; ".join(by_relation[relation])
+                    )
+        lines.append("")
     if not shown:
         lines.extend(
             [
@@ -72,6 +109,8 @@ def _render_source_card(number: int, item: dict, *, include_claim: bool = False)
     ]
     if chunk.evidence_role:
         lines.insert(9, f"| **Evidence role** | {_table_cell(chunk.evidence_role)} |")
+    if item.get("quote_role"):
+        lines.insert(9, f"| **Matched quote type** | {_table_cell(item['quote_role'])} |")
     if item.get("evidence_status"):
         lines.insert(9, f"| **Evidence assessment** | {_table_cell(item['evidence_status'])} |")
 

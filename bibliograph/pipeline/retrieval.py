@@ -60,48 +60,9 @@ def _search_claim_with_backend(
 
 
 def _render_subtask_results(request, hits, traces, *, query_count: int) -> str:
-    """Render one compact summary for a query batch, not one list per query."""
-    lines = ["Search subtask results:", f"  Claim: {request.text}"]
-    lines.append(f"  Search pass: {query_count} query variant(s)")
-
-    if hits:
-        lines.append(f"  Evidence candidates: {len(hits)} unique · top {min(3, len(hits))}")
-        for chunk, score in hits[:3]:
-            paper = chunk.paper
-            title = paper.title.strip() or paper.zotero_key
-            if "_" in title:
-                title = title.replace("_", " ").title()
-            location = f", p. {chunk.page}" if chunk.page is not None else ""
-            excerpt = " ".join(chunk.text.split())
-            if len(excerpt) > 125:
-                excerpt = excerpt[:122].rsplit(" ", 1)[0] + "…"
-            lines.append(f"    - {title}{location} · relevance {float(score):.3f}")
-            if excerpt:
-                lines.append(f"      “{excerpt}”")
-    else:
-        lines.append("  Evidence candidates: none")
-
-    trace_list = traces if isinstance(traces, (list, tuple)) else [traces]
-    trace_list = [trace for trace in trace_list if trace is not None]
-    if trace_list:
-        seeds = {
-            str(seed.get("id", seed) if isinstance(seed, dict) else seed)
-            for trace in trace_list
-            for seed in trace.metadata.get("seeds", ())
-        }
-        path_count = sum(len(trace.paths) for trace in trace_list)
-        edge_count = sum(len(trace.edges) for trace in trace_list)
-        if path_count:
-            lines.append(f"  Retrieval context: graph expansion followed {path_count} paths")
-        elif edge_count:
-            lines.append(f"  Retrieval context: graph expansion used {edge_count} links")
-        elif seeds:
-            lines.append(f"  Retrieval context: started from {len(seeds)} indexed passages")
-        else:
-            lines.append("  Retrieval context: no graph expansion paths returned")
-    else:
-        lines.append("  Retrieval context: provenance unavailable")
-    return "\n".join(lines)
+    """Return one live progress summary for a retrieval pass."""
+    del request, traces
+    return f"Retrieved candidates · {len(hits)} unique · {query_count} query variant(s)"
 
 
 def search_claim(

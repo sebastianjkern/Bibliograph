@@ -85,7 +85,14 @@ _RERANK_SCHEMA: dict[str, object] = {
 _EVIDENCE_SCHEMA: dict[str, object] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["relation", "quote", "reason", "scope"],
+    "required": [
+        "relation",
+        "quote",
+        "reason",
+        "scope",
+        "quote_role",
+        "quote_directness",
+    ],
     "properties": {
         "relation": {
             "type": "string",
@@ -93,6 +100,22 @@ _EVIDENCE_SCHEMA: dict[str, object] = {
         },
         "quote": {"type": "string"},
         "reason": {"type": "string"},
+        "quote_role": {
+            "type": "string",
+            "enum": [
+                "finding",
+                "method",
+                "data_description",
+                "interpretation",
+                "limitation",
+                "background",
+                "other",
+            ],
+        },
+        "quote_directness": {
+            "type": "string",
+            "enum": ["direct", "contextual", "unrelated"],
+        },
         "scope": {
             "type": "object",
             "additionalProperties": False,
@@ -147,15 +170,15 @@ def expand_query(
 
 def refine_queries(
     claim: str,
-    excerpts: Sequence[str],
+    evidence_ledger: Sequence[str],
     *,
     complete: Complete,
 ) -> list[str]:
-    """Use retrieved wording to propose a small set of claim-preserving queries."""
+    """Target unresolved evidence gaps using only already retrieved source material."""
     context = "\n\n".join(
-        f"[{index}] {' '.join(excerpt.split())[:1200]}"
-        for index, excerpt in enumerate(excerpts[:5], start=1)
-        if excerpt.strip()
+        f"[{index}] {' '.join(entry.split())[:1400]}"
+        for index, entry in enumerate(evidence_ledger[:8], start=1)
+        if entry.strip()
     )
     if not context:
         return []
@@ -163,16 +186,20 @@ def refine_queries(
         {
             "role": "system",
             "content": (
-                "Propose at most four follow-up search queries for the original claim, "
-                "using terminology observed in the retrieved excerpts. Keep the original "
-                "claim's meaning and entities; excerpts are vocabulary sources, not proof. "
-                "Do not broaden the claim or introduce unsupported relations. Return JSON "
-                "only as {\"queries\": [\"...\"]}."
+                "Propose at most four targeted follow-up queries for the original claim. "
+                "Treat the supplied evidence ledger as the baseline: identify explicit "
+                "uncertainties in the assessed passages (such as a missing population, unit, "
+                "outcome, geography, time period, or a mixed finding) and make each query "
+                "address one such gap using terminology present in the source material. Do "
+                "not generate queries from general associations or model background knowledge, "
+                "do not invent entities or relations, and do not broaden the claim. If the ledger "
+                "does not reveal a specific gap that another search could address, return an "
+                "empty list. Return JSON only as {\"queries\": [\"...\"]}."
             ),
         },
         {
             "role": "user",
-            "content": f"ORIGINAL CLAIM:\n{claim}\n\nRETRIEVED EXCERPTS:\n{context}",
+            "content": f"ORIGINAL CLAIM:\n{claim}\n\nASSESSED EVIDENCE LEDGER:\n{context}",
         },
     ]
     payload = _json_object(_complete_json(complete, messages, {
@@ -479,7 +506,14 @@ def select_evidence(
             "role": "system",
             "content": (
                 "Assess the relation between CLAIM and CONTEXT using only the source text. "
-                "relation as supports, contradicts, mixed, or insufficient; quote must "
+                "Return relation as supports, contradicts, mixed, or insufficient. Choose the "
+                "shortest exact quote that directly states the evidence relevant to the claim. "
+                "Prefer an explicit finding/result sentence over a nearby methods, data-source, "
+                "caption, or interpretation sentence when the claim is about a result. Do not "
+                "select text merely because it mentions related entities or methods. If the "
+                "context contains only topical methods/background and no direct result for the "
+                "claim, set relation to insufficient. Classify quote_role and quote_directness; "
+                "a non-insufficient assessment requires quote_directness=direct. The quote must "
                 "be exact text copied from CONTEXT; reason must be concise and source-grounded. "
                 "Also return scope fields population, unit, outcome, geography, and time. "
                 "Copy only what the context explicitly states; leave a field empty when unstated. "
@@ -495,7 +529,9 @@ def select_evidence(
             "role": "user",
             "content": (
                 f"CLAIM:\n{claim}\n\nSOURCE:\n{citation_label(chunk.paper)}, "
-                f"page {chunk.page or 'unknown'}\n\nCONTEXT:\n{context}"
+                f"page {chunk.page or 'unknown'}\n"
+                f"\nCHUNK ROLE: {chunk.evidence_role or 'unknown'}"
+                f"\nCONTENT KIND: {chunk.content_kind}\n\nCONTEXT:\n{context}"
             ),
         },
     ]
@@ -504,7 +540,10 @@ def select_evidence(
     if relation not in {"supports", "contradicts", "mixed", "insufficient"}:
         relation = "insufficient"
     quote = str(payload.get("quote", "")).strip()
-    if relation != "insufficient" and not _is_valid_quote(quote, context):
+    quote_directness = str(payload.get("quote_directness", "unrelated"))
+    if relation != "insufficient" and (
+        quote_directness != "direct" or not _is_valid_quote(quote, context)
+    ):
         relation = "insufficient"
         quote = ""
     raw_scope = payload.get("scope", {})
@@ -518,6 +557,8 @@ def select_evidence(
         "matched_quote": " ".join(quote.split()) if quote else "",
         "reason": str(payload.get("reason", "")).strip(),
         "scope": scope,
+        "quote_role": str(payload.get("quote_role", "other")),
+        "quote_directness": quote_directness,
     }
 
 
