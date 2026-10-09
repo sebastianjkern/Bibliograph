@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from inspect import signature
 
 from ..domain import Chunk, Claim, ScoredChunk
+from ..knowledge import QueryRequest
 from .llm_tasks import heuristic_rerank, template_rationale
 
 EmbedQueries = Callable[[Sequence[str]], list[list[float]]]
@@ -31,6 +32,7 @@ def _search_claim_with_backend(
     explain: Explain | None = None,
     enrich: bool = True,
     top_only: bool = False,
+    include_trace: bool = False,
 ) -> dict:
     """Retrieve through the configured backend and retain Bibliograph's citation result contract."""
     text = claim["text"].strip()
@@ -43,11 +45,25 @@ def _search_claim_with_backend(
         alternatives = _run_expander(expand, text, progress)
     if progress is not None:
         progress("Retrieving evidence · 1/1 queries")
-    hits, score_details = backend.retrieve(
-        text,
-        alternatives=alternatives,
-        limit=max(limit, 10),
-    )
+    request = QueryRequest.from_alternatives(text, alternatives)
+    retrieve_request = getattr(backend, "retrieve_request", None)
+    if retrieve_request is not None:
+        engine_result = retrieve_request(
+            request,
+            limit=max(limit, 10),
+            include_trace=include_trace,
+        )
+        hits = list(engine_result.hits)
+        score_details = dict(engine_result.score_details)
+        retrieval_trace = engine_result.trace
+    else:
+        # Compatibility for injected legacy backends during the adapter migration.
+        hits, score_details = backend.retrieve(
+            text,
+            alternatives=alternatives,
+            limit=max(limit, 10),
+        )
+        retrieval_trace = None
     hits = [hit for hit in hits if hit[1] >= min_score]
     if rerank is not None:
         if progress is not None:
@@ -59,6 +75,7 @@ def _search_claim_with_backend(
         "queries": (text, *alternatives),
         "hits": selected_hits,
         "score_details": score_details,
+        "retrieval_trace": retrieval_trace,
     }
     if enrich:
         enrichment_hits = selected_hits[:1] if top_only else selected_hits

@@ -2,6 +2,7 @@ from threading import Lock
 from time import sleep
 
 from bibliograph.domain import Chunk, Paper
+from bibliograph.knowledge import QueryRequest, RetrievalResult, RetrievalTrace
 from bibliograph.pipeline.drafts import parse_draft
 from bibliograph.pipeline.retrieval import enrich_hits, retrieve_claims, search_claim
 from bibliograph.render import render_check, render_search
@@ -261,6 +262,42 @@ def test_explain_strips_label_prefixes_from_llm_output():
     )
 
     assert content == "The evidence directly addresses the claim."
+
+
+def test_knowledge_backend_receives_neutral_query_and_returns_trace():
+    paper = Paper("P1", "Road study")
+    chunk = Chunk("P1:1:0", paper, "Road quality improves market access.")
+    requests = []
+    trace = RetrievalTrace(
+        nodes=({"id": chunk.chunk_id, "kind": "chunk"},),
+        edges=(),
+    )
+
+    class Backend:
+        def retrieve_request(self, request: QueryRequest, *, limit, include_trace):
+            requests.append((request, limit, include_trace))
+            return RetrievalResult(
+                hits=((chunk, 0.8),),
+                score_details={chunk.chunk_id: {"retrieval": 0.8}},
+                trace=trace,
+            )
+
+    result = search_claim(
+        {"text": "Road quality affects market access.", "citation_keys": ()},
+        backend=Backend(),
+        expand=lambda _claim: ["Transport infrastructure and trade"],
+        enrich=False,
+        include_trace=True,
+    )
+
+    request, limit, include_trace = requests[0]
+    assert request.text == "Road quality affects market access."
+    assert [hypothesis.text for hypothesis in request.hypotheses] == [
+        "Transport infrastructure and trade"
+    ]
+    assert limit == 10
+    assert include_trace is True
+    assert result["retrieval_trace"] is trace
 
 
 def test_backend_retrieval_search_claim_accepts_backend_keyword():

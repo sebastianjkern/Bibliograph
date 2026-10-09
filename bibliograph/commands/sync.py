@@ -17,6 +17,7 @@ from rich.progress import (
 
 from ..adapters.acquisition import acquire_pdf
 from ..adapters.zotero import discover_collection, resolve_collection
+from ..knowledge import KnowledgeDocument
 
 
 def sync_library(
@@ -105,13 +106,31 @@ def sync_library(
             try:
                 if task_id is not None:
                     progress.update(task_id, description=f"Indexing {title}")
-                result = store.index_pdf(
-                    document["paper"],
-                    source_key,
-                    document.get("version"),
-                    path,
-                    extract_pages=extract_pages,
-                )
+                index_document = getattr(store, "index_document", None)
+                if index_document is not None:
+                    result = index_document(
+                        KnowledgeDocument(
+                            source_key=source_key,
+                            paper=document["paper"],
+                            path=Path(path),
+                            version=(
+                                None
+                                if document.get("version") is None
+                                else str(document["version"])
+                            ),
+                            metadata=document.get("metadata", {}),
+                        ),
+                        extract_pages=extract_pages,
+                    )
+                else:
+                    # Compatibility for legacy stores during the knowledge-engine migration.
+                    result = store.index_pdf(
+                        document["paper"],
+                        source_key,
+                        document.get("version"),
+                        path,
+                        extract_pages=extract_pages,
+                    )
             except Exception as error:
                 store.record_document_failure(
                     document["paper"],

@@ -4,27 +4,28 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sqlite3
 import tempfile
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
+from adapters.providers.filesystems.fsspec import LocalFilesystem
 from adapters.providers.graph_stores import SQLiteGraphStore
 from adapters.providers.lexical_indexes import SQLiteFTSIndex
 from adapters.providers.vector_stores import sqlite_vec
 from core.knowledge.graph import DocumentRecord, GraphEdge, GraphNode, PersonalizedPageRankExpansion
+from core.knowledge.index_manifest import IndexManifest
 from core.knowledge.ingest import DocumentGraph
-from core.knowledge.index_manifest import IndexManifest, IndexCompatibilityError
+from core.knowledge.ingest import ingest as ingest_documents
 from core.knowledge.rag import retrieve as retrieve_rag
+from core.knowledge.retrieval import QueryHypothesis as IkarusQueryHypothesis
 from core.knowledge.retrieval import QueryPlan
 from core.knowledge.vector_store import configure as configure_vector_store
-from core.knowledge.vector_store import get_metadata, query as query_vectors
 
 from ..domain import Chunk, Paper, RetrievalScore, ScoredChunk
+from ..knowledge import KnowledgeDocument, QueryRequest, RetrievalResult, RetrievalTrace
 from ..pipeline.indexing import INDEXING_FINGERPRINT
 
 INDEX_SCHEMA_VERSION = 1
@@ -149,6 +150,80 @@ class IkarusBackend:
             sqlite_vec._connection.close()
             sqlite_vec._connection = None
 
+    def index_document(
+        self,
+        document: KnowledgeDocument,
+        *,
+        extract_pages: Callable[[str | Path], list[tuple[int, str, str | None]]],
+    ) -> dict[str, Any]:
+        """Index through Ikarus's generic ingestion pipeline.
+
+        Bibliograph supplies the PDF extraction and paper-domain graph profile;
+        Ikarus owns chunk storage, embedding batches, replacement, lexical
+        indexing, and cleanup.
+        """
+        self._require_write()
+        pages = extract_pages(document.path)
+        chunks = _chunk_paper(document.paper, pages)
+        record = DocumentRecord(
+            document.source_key,
+            document.path.resolve().as_uri(),
+            None if document.version is None else str(document.version),
+            _paper_metadata(document.paper, document.source_key, document.path),
+        )
+
+        def load_document(_source: str, _filesystem) -> str:
+            return "\n\n".join(chunk.text for chunk in chunks)
+
+        def chunk_document(_text: str):
+            for chunk in chunks:
+                yield {
+                    "text": chunk.text,
+                    "metadata": {
+                        "page": chunk.page,
+                        "section": chunk.section,
+                        "ordinal": chunk.ordinal,
+                        "content_kind": chunk.content_kind,
+                    },
+                }
+
+        ingested = ingest_documents(
+            str(document.path),
+            filesystem=LocalFilesystem(),
+            loader=load_document,
+            chunker=chunk_document,
+            document=record,
+            batch_embedder=self.embedding["embed_documents"],
+            graph_store=self.graph,
+            document_strategy=lambda _record, nodes: _paper_graph(record, nodes),
+            lexical_index=self.lexical,
+        )
+        stat = document.path.stat()
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO bibliograph_sources(
+                       source_key, document_id, version, path, mtime_ns, size, state, detail
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                   ON CONFLICT(source_key) DO UPDATE SET
+                     document_id=excluded.document_id, version=excluded.version,
+                     path=excluded.path, mtime_ns=excluded.mtime_ns, size=excluded.size,
+                     state=excluded.state, detail=NULL, updated_at=CURRENT_TIMESTAMP""",
+                (
+                    document.source_key,
+                    document.source_key,
+                    document.version,
+                    str(document.path.resolve()),
+                    stat.st_mtime_ns,
+                    stat.st_size,
+                    "indexed" if ingested else "empty",
+                ),
+            )
+        return {
+            "source_key": document.source_key,
+            "chunks": len(ingested),
+            "path": str(document.path),
+        }
+
     def index_pdf(
         self,
         paper: Paper,
@@ -246,8 +321,40 @@ class IkarusBackend:
         alternatives: Sequence[str] = (),
         limit: int = 10,
     ) -> tuple[list[ScoredChunk], dict[str, dict[str, float]]]:
+        """Compatibility wrapper for callers using the old string interface."""
+        result = self.retrieve_request(
+            QueryRequest.from_alternatives(query, alternatives),
+            limit=limit,
+        )
+        return list(result.hits), dict(result.score_details)
+
+    def retrieve_request(
+        self,
+        request: QueryRequest,
+        *,
+        limit: int = 10,
+        include_trace: bool = False,
+    ) -> RetrievalResult:
+        """Retrieve through the knowledge-engine boundary.
+
+        The current adapter translates the neutral request to the installed
+        Ikarus API.  Trace support is intentionally opt-in; it becomes
+        available here when the Ikarus engine exposes provenance data.
+        """
         self._require_open()
-        plan = QueryPlan((query, *alternatives))
+        query = request.text
+        hypotheses = tuple(
+            IkarusQueryHypothesis(
+                hypothesis.text,
+                hypothesis.kind,
+                hypothesis.weight,
+                hypothesis.entities,
+                hypothesis.relations,
+            )
+            for hypothesis in request.hypotheses
+        )
+        plan = QueryPlan.from_hypotheses(query, hypotheses)
+        trace_payload: dict[str, object] | None = {} if include_trace else None
         results = retrieve_rag(
             query,
             k=max(limit * 4, 12),
@@ -262,6 +369,7 @@ class IkarusBackend:
             graph_relations=("contains", "in_section", "next_chunk"),
             score_weights={"semantic": 0.55, "lexical": 0.2, "graph": 0.25},
             planner=lambda _query: plan,
+            trace=trace_payload,
         )
         hits: list[ScoredChunk] = []
         details: dict[str, dict[str, float]] = {}
@@ -293,7 +401,23 @@ class IkarusBackend:
             }
             if len(hits) >= limit:
                 break
-        return hits, details
+        trace = None
+        if trace_payload is not None:
+            trace = RetrievalTrace(
+                nodes=tuple(trace_payload.get("nodes", ())),
+                edges=tuple(trace_payload.get("edges", ())),
+                paths=tuple(trace_payload.get("paths", ())),
+                metadata={
+                    "queries": tuple(trace_payload.get("queries", ())),
+                    "hypotheses": tuple(trace_payload.get("hypotheses", ())),
+                    "seeds": tuple(trace_payload.get("seeds", ())),
+                },
+            )
+        return RetrievalResult(
+            hits=tuple(hits),
+            score_details=details,
+            trace=trace,
+        )
 
     def needs_document(self, source_key: str, version: str | int | None, path: str | Path) -> bool:
         self._require_open()
