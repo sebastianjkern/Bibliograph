@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from adapters.providers.model_runtimes.registry import chat_names, embedding_names
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
@@ -16,7 +17,6 @@ from rich.text import Text
 
 from .bootstrap import run_check, run_ingest_pdfs, run_search, run_status, run_sync
 from .logging_utils import configure_logging, get_logger
-from adapters.providers.model_runtimes.registry import chat_names, embedding_names
 from .render import render_sync
 from .settings import load_settings
 
@@ -322,7 +322,10 @@ def _announce_command(args: argparse.Namespace, settings: dict[str, Any]) -> Non
     details.add_column(style="#767676")
     details.add_row("Profile", str(args.profile))
     details.add_row("Embeddings", f"{embedding.get('provider')} · {embedding.get('model')}")
-    details.add_row("Reasoning", f"{llm.get('provider')} · {llm.get('model')}")
+    details.add_row("LLM default", f"{llm.get('provider')} · {llm.get('model')}")
+    for stage, provider, model, enabled in _llm_stage_overview(llm):
+        status = "active" if enabled else "inactive"
+        details.add_row(f"LLM · {stage}", f"{provider} · {model} ({status})")
     details.add_row("Index", str(settings.get("db")))
     if args.command in {"search", "legacy-search"}:
         details.add_row("Task", "Find and rank evidence for one claim")
@@ -343,6 +346,32 @@ def _announce_command(args: argparse.Namespace, settings: dict[str, Any]) -> Non
             padding=(0, 1),
         )
     )
+
+
+def _llm_stage_overview(llm: dict[str, Any]) -> list[tuple[str, str, str, bool]]:
+    overrides = llm.get("models", {})
+    enabled_stages = set(llm.get("stages", ()))
+    active_mode = llm.get("mode") != "off"
+    stages = (
+        ("expand", "Query expansion"),
+        ("rerank", "Reranking"),
+        ("evidence", "Evidence selection"),
+        ("rationale", "Rationale"),
+    )
+    overview = []
+    for key, label in stages:
+        override = overrides.get(key, {})
+        if isinstance(override, str):
+            override = {"model": override}
+        overview.append(
+            (
+                label,
+                str(override.get("provider", llm.get("provider"))),
+                str(override.get("model", llm.get("model"))),
+                active_mode and key in enabled_stages,
+            )
+        )
+    return overview
 
 
 def _print_configuration_summary(config_path: Path | None, profile: str) -> None:

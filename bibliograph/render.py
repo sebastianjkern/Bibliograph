@@ -23,40 +23,16 @@ def render_search(
     shown = items if verbose else assessed[:3]
     lines = ["# Local sources", "", f"> Claim: {claim}", ""]
     if synthesis and synthesis.get("sources"):
-        summary_heading = (
-            "Cross-paper synthesis"
-            if synthesis.get("paper_count", 0) > 1
-            else "Evidence summary"
-        )
         lines.extend(
-            [summary_heading, str(synthesis.get("summary", ""))]
+            [
+                "## Claim-level synthesis",
+                "",
+                "**Conclusion:** " + str(synthesis.get("conclusion", "")),
+                "",
+                "**Evidence coverage:** " + str(synthesis.get("summary", "")),
+                "",
+            ]
         )
-        sources = synthesis.get("sources", [])
-        if isinstance(sources, list):
-            by_relation: dict[str, list[str]] = {}
-            seen: set[tuple[str, str]] = set()
-            for source in sources:
-                if not isinstance(source, dict):
-                    continue
-                relation = str(source.get("relation", ""))
-                key = str(source.get("source_id", ""))
-                if relation not in {"supports", "partial", "contradicts", "mixed"} or not key:
-                    continue
-                unique_key = (relation, key + ":" + str(source.get("page", "")))
-                if unique_key in seen:
-                    continue
-                seen.add(unique_key)
-                title = _display_title(str(source.get("title", key)))
-                page = source.get("page")
-                by_relation.setdefault(relation, []).append(
-                    f"{title}{f', p. {page}' if page else ''}"
-                )
-            for relation in ("supports", "partial", "contradicts", "mixed"):
-                if by_relation.get(relation):
-                    lines.append(
-                        f"- **{relation.title()}:** " + "; ".join(by_relation[relation])
-                    )
-        lines.append("")
     if not shown:
         lines.extend(
             [
@@ -65,6 +41,8 @@ def render_search(
             ]
         )
     paper_groups = _group_by_paper(shown)
+    if paper_groups:
+        lines.extend(["## Source-level evidence", ""])
     for index, group in enumerate(paper_groups, start=1):
         lines.extend(_render_paper_card(index, group))
     if not verbose and len(assessed) > len(shown):
@@ -76,9 +54,7 @@ def render_search(
             ]
         )
     if not verbose and items and not assessed:
-        lines.extend(
-            [f"{len(items)} retrieved passage(s) were not assessed as evidence.", ""]
-        )
+        lines.extend([f"{len(items)} retrieved passage(s) were not assessed as evidence.", ""])
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -100,51 +76,69 @@ def _group_by_paper(items: Iterable[dict]) -> list[list[dict]]:
 
 
 def _render_paper_card(number: int, items: list[dict]) -> list[str]:
-    if len(items) == 1:
-        return _render_source_card(number, items[0])
+    paper = items[0]["chunk"].paper
+    title = _display_title(paper.title)
+    lines = [f"### Source {number}: {title}", ""]
+    lines.extend(
+        [
+            "| Source details | Value |",
+            "| :--- | :--- |",
+            f"| **Title** | {_table_cell(title)} |",
+            f"| **DOI** | {_table_cell(paper.doi or 'unknown')} |",
+            "",
+        ]
+    )
+    for number, item in enumerate(items, start=1):
+        lines.extend(_render_passage(number, item))
+    return lines
 
-    relations = []
-    for item in items:
-        page = item["chunk"].page
-        location = f"p. {page}" if page is not None else "page unknown"
-        relations.append(f"{item.get('evidence_relation', 'unassessed')} ({location})")
-    representative = {
-        **items[0],
-        "evidence_status": "; ".join(relations),
-        "rationale": "Passage-level assessments are listed below.",
-        "evidence_relation": "passage-level",
-    }
-    lines = _render_source_card(number, representative)
-    for item in items[1:]:
-        chunk = item["chunk"]
-        page = f"p. {chunk.page}" if chunk.page is not None else "page unknown"
-        lines.extend(
-            [
-                f"### Additional passage · {page} · {chunk.section or 'section unknown'}",
-                _highlight_matched_excerpt(
-                    item["evidence"], item.get("matched_excerpt")
-                ),
-                "",
-                f"**Assessment:** {item.get('evidence_relation', 'unassessed')} — "
-                f"{item.get('rationale', '')}",
-            ]
-        )
-        scope = item.get("evidence_scope", {})
-        if isinstance(scope, dict):
-            stated = [
-                f"{label}: {_table_cell(str(scope[key]))}"
-                for key, label in (
-                    ("population", "Population"),
-                    ("unit", "Unit"),
-                    ("outcome", "Outcome"),
-                    ("geography", "Geography"),
-                    ("time", "Time"),
-                )
-                if scope.get(key)
-            ]
-            if stated:
-                lines.extend(["", "**Stated scope:** " + "; ".join(stated)])
-        lines.append("")
+
+def _render_passage(number: int, item: dict) -> list[str]:
+    chunk = item["chunk"]
+    page = f"p. {chunk.page}" if chunk.page is not None else "page unknown"
+    role = item.get("quote_role") or chunk.evidence_role
+    heading = f"#### Passage {number} · {page}"
+    if role:
+        heading += f" · {role}"
+    lines = [heading, "", "| Passage details | Value |", "| :--- | :--- |"]
+    for label, value in (
+        ("Retrieval relevance", item.get("retrieval_score", item["score"])),
+        ("Vector similarity", item.get("vector_score", item["score"])),
+        ("Lexical closeness", item.get("lexical_score", 0.0)),
+        ("Section", chunk.section or "unknown"),
+    ):
+        if isinstance(value, (int, float)):
+            value = f"{value:.2f}"
+        lines.append(f"| **{label}** | {_table_cell(str(value))} |")
+    lines.extend(
+        [
+            "",
+            "**Source context (matched excerpt highlighted):**",
+            "",
+            _highlight_matched_excerpt(
+                item.get("evidence", chunk.text), item.get("matched_excerpt")
+            ),
+            "",
+            f"**Passage-level assessment:** {item.get('evidence_relation', 'unassessed')} — "
+            f"{item.get('rationale', '')}",
+        ]
+    )
+    scope = item.get("evidence_scope", {})
+    if isinstance(scope, dict):
+        stated = [
+            f"{label}: {_table_cell(str(scope[key]))}"
+            for key, label in (
+                ("population", "Population"),
+                ("unit", "Unit"),
+                ("outcome", "Outcome"),
+                ("geography", "Geography"),
+                ("time", "Time"),
+            )
+            if scope.get(key)
+        ]
+        if stated:
+            lines.extend(["", "**Passage scope:** " + "; ".join(stated)])
+    lines.append("")
     return lines
 
 
@@ -186,7 +180,7 @@ def _render_source_card(number: int, item: dict, *, include_claim: bool = False)
         [
             "",
             f"### Source context · {chunk.section or 'section unknown'}",
-            _highlight_matched_excerpt(item['evidence'], item.get('matched_excerpt')),
+            _highlight_matched_excerpt(item["evidence"], item.get("matched_excerpt")),
         ]
     )
 

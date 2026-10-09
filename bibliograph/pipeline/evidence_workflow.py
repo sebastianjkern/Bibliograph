@@ -94,8 +94,7 @@ def build_evidence_workflow(
     def retrieve(state: EvidenceState) -> dict:
         candidates = dict(state["candidates"])
         candidate_queries = {
-            identifier: list(queries)
-            for identifier, queries in state["candidate_queries"].items()
+            identifier: list(queries) for identifier, queries in state["candidate_queries"].items()
         }
         score_details = dict(state["score_details"])
         query_traces = list(state["query_traces"])
@@ -131,9 +130,7 @@ def build_evidence_workflow(
                 candidate_queries.setdefault(identifier, []).append(query)
                 if identifier in details:
                     score_details[identifier] = dict(details[identifier])
-        pass_traces = [
-            entry["trace"] for entry in query_traces[pass_trace_start:]
-        ]
+        pass_traces = [entry["trace"] for entry in query_traces[pass_trace_start:]]
         pass_hits = sorted(candidates.values(), key=lambda hit: hit[1], reverse=True)
         report(
             _render_subtask_results(
@@ -164,12 +161,16 @@ def build_evidence_workflow(
 
     def assess(state: EvidenceState) -> dict:
         candidates = list(state["candidates"].values())
-        ranked = _run_reranker(
-            rerank,
-            state["claim"]["text"],
-            candidates,
-            progress,
-        ) if rerank is not None else sorted(candidates, key=lambda hit: hit[1], reverse=True)
+        ranked = (
+            _run_reranker(
+                rerank,
+                state["claim"]["text"],
+                candidates,
+                progress,
+            )
+            if rerank is not None
+            else sorted(candidates, key=lambda hit: hit[1], reverse=True)
+        )
         assessment_results = dict(state.get("assessment_results", {}))
         if select_evidence is not None:
             for hit in ranked[: max(5, limit * 2)]:
@@ -231,10 +232,7 @@ def build_evidence_workflow(
             context_windows[identifier] = next_window
             extended += int(expanded != state["contexts"][identifier])
         extension_round = max(context_windows.values(), default=1) - 1
-        report(
-            f"Context extension · round {extension_round} · "
-            f"{extended} passage(s) updated"
-        )
+        report(f"Context extension · round {extension_round} · {extended} passage(s) updated")
         return {"contexts": contexts, "context_windows": context_windows}
 
     def refine_queries(state: EvidenceState) -> dict:
@@ -313,14 +311,18 @@ def build_evidence_workflow(
             chunk.chunk_id: state["contexts"].get(chunk.chunk_id, chunk.text)
             for chunk, _score in selected_hits
         }
-        items = enrich_hits(
-            [{**base, "hits": selected_hits[:1] if top_only else selected_hits}],
-            context_for=lambda chunk: contexts[chunk.chunk_id],
-            explain=explain if select_evidence is None else None,
-        ) if enrich else enrich_hits(
-            [base],
-            context_for=lambda chunk: contexts[chunk.chunk_id],
-            top_only=top_only,
+        items = (
+            enrich_hits(
+                [{**base, "hits": selected_hits[:1] if top_only else selected_hits}],
+                context_for=lambda chunk: contexts[chunk.chunk_id],
+                explain=explain if select_evidence is None else None,
+            )
+            if enrich
+            else enrich_hits(
+                [base],
+                context_for=lambda chunk: contexts[chunk.chunk_id],
+                top_only=top_only,
+            )
         )
         for item in items:
             identifier = item["chunk"].chunk_id
@@ -337,31 +339,32 @@ def build_evidence_workflow(
                 item["matched_excerpt"] = (
                     assessment.get("matched_quote") or None if assessment else None
                 )
-                item["assessment_reason"] = (
-                    assessment.get("reason", "") if assessment else ""
-                )
-                item["evidence_scope"] = (
-                    assessment.get("scope", {}) if assessment else {}
-                )
+                item["assessment_reason"] = assessment.get("reason", "") if assessment else ""
+                item["evidence_scope"] = assessment.get("scope", {}) if assessment else {}
                 item["quote_role"] = (
                     assessment.get("quote_role", "other") if assessment else "other"
                 )
-                item["rationale"] = {
-                    "supports": "The source passage supports the claim within its stated scope.",
-                    "partial": (
-                        "The evidence supports part of the claim but does not establish "
-                        "its full scope."
-                    ),
-                    "contradicts": (
-                        "The source passage contradicts the claim within its stated scope."
-                    ),
-                    "mixed": (
-                        "The source passage contains both supporting and contradicting evidence."
-                    ),
-                    "insufficient": (
-                        "The passage does not establish a supporting or contradicting relation."
-                    ),
-                }[relation]
+                item["rationale"] = str(assessment.get("reason", "")).strip() if assessment else ""
+                if not item["rationale"]:
+                    item["rationale"] = {
+                        "supports": (
+                            "The source passage supports the claim within its stated scope."
+                        ),
+                        "partial": (
+                            "The evidence supports part of the claim but does not establish "
+                            "its full scope."
+                        ),
+                        "contradicts": (
+                            "The source passage contradicts the claim within its stated scope."
+                        ),
+                        "mixed": (
+                            "The source passage contains both supporting and contradicting "
+                            "evidence."
+                        ),
+                        "insufficient": (
+                            "The passage does not establish a supporting or contradicting relation."
+                        ),
+                    }[relation]
             elif select_evidence is not None:
                 item["evidence_status"] = "not_assessed"
         traces = state["query_traces"]
@@ -460,8 +463,7 @@ def _synthesize_cross_paper(items: Sequence[dict]) -> dict[str, object]:
     paper_relations: dict[str, set[str]] = {}
     paper_scopes: dict[str, dict[str, set[str]]] = {}
     relation_passages = {
-        relation: 0
-        for relation in ("supports", "partial", "contradicts", "mixed", "insufficient")
+        relation: 0 for relation in ("supports", "partial", "contradicts", "mixed", "insufficient")
     }
     scope_keys = ("population", "unit", "outcome", "geography", "time")
     for item in items:
@@ -472,9 +474,7 @@ def _synthesize_cross_paper(items: Sequence[dict]) -> dict[str, object]:
         source_id = chunk.paper.zotero_key
         scope = item.get("evidence_scope", {})
         scope = scope if isinstance(scope, dict) else {}
-        paper_scope = paper_scopes.setdefault(
-            source_id, {key: set() for key in scope_keys}
-        )
+        paper_scope = paper_scopes.setdefault(source_id, {key: set() for key in scope_keys})
         for key in scope_keys:
             value = str(scope.get(key, "")).strip()
             if value:
@@ -496,27 +496,18 @@ def _synthesize_cross_paper(items: Sequence[dict]) -> dict[str, object]:
 
     relation_sources = {
         relation: sorted(
-            source_id
-            for source_id, relations in paper_relations.items()
-            if relation in relations
+            source_id for source_id, relations in paper_relations.items() if relation in relations
         )
         for relation in relation_passages
     }
     scope_variation: dict[str, list[str]] = {}
     if len(paper_scopes) > 1:
         for key in scope_keys:
-            values = {
-                value
-                for paper_scope in paper_scopes.values()
-                for value in paper_scope[key]
-            }
+            values = {value for paper_scope in paper_scopes.values() for value in paper_scope[key]}
             if len(values) > 1:
                 scope_variation[key] = sorted(values)
 
-    paper_counts = {
-        relation: len(source_ids)
-        for relation, source_ids in relation_sources.items()
-    }
+    paper_counts = {relation: len(source_ids) for relation, source_ids in relation_sources.items()}
     if not sources:
         summary = "No independently assessed source passages were available to synthesize."
     else:
@@ -541,6 +532,7 @@ def _synthesize_cross_paper(items: Sequence[dict]) -> dict[str, object]:
         summary += " This is descriptive, not a pooled estimate."
     return {
         "summary": summary,
+        "conclusion": _overall_conclusion(paper_counts),
         "paper_count": len(paper_relations),
         "passage_count": len(sources),
         "sources": sources,
@@ -550,14 +542,45 @@ def _synthesize_cross_paper(items: Sequence[dict]) -> dict[str, object]:
     }
 
 
+def _overall_conclusion(paper_counts: dict[str, int]) -> str:
+    supporting = paper_counts.get("supports", 0)
+    partial = paper_counts.get("partial", 0)
+    contradicting = paper_counts.get("contradicts", 0)
+    mixed = paper_counts.get("mixed", 0)
+    if not any((supporting, partial, contradicting, mixed)):
+        return "The retrieved passages do not establish a conclusion about the claim."
+    if contradicting and (supporting or partial or mixed):
+        return (
+            "Overall, the assessed evidence is mixed: some source passages support the claim "
+            "within their stated scope, while others contradict it or report mixed findings."
+        )
+    if contradicting:
+        return "Overall, the assessed evidence weighs against the claim within the reported scopes."
+    if partial and not supporting:
+        return (
+            "Overall, the evidence is partial: the assessed passages support only part of the "
+            "claim or do not establish its full scope."
+        )
+    if mixed:
+        return "Overall, at least one source reports both supporting and contradicting evidence."
+    if partial:
+        return (
+            "Overall, the assessed evidence supports the claim in part, but does not establish "
+            "its full scope."
+        )
+    return (
+        "Overall, the assessed evidence supports the claim within the sources' reported scopes; "
+        "it should not be generalized beyond those settings."
+    )
+
+
 def _unresolved_candidate_ids(
     assessments: dict[str, dict[str, object] | None],
 ) -> list[str]:
     return [
         identifier
         for identifier, assessment in assessments.items()
-        if assessment is None
-        or assessment.get("relation") in {"partial", "insufficient", "mixed"}
+        if assessment is None or assessment.get("relation") in {"partial", "insufficient", "mixed"}
     ]
 
 
@@ -637,11 +660,7 @@ def _normalise_assessment(selection, context: str) -> dict[str, object]:
     if relation not in {"supports", "partial", "contradicts", "mixed"}:
         relation = "insufficient"
         quote = ""
-    elif (
-        quote_directness != "direct"
-        or not quote
-        or not contains_text(context, quote)
-    ):
+    elif quote_directness != "direct" or not quote or not contains_text(context, quote):
         relation = "insufficient"
         quote = ""
     raw_scope = selection.get("scope", {})

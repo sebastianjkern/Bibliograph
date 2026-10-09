@@ -18,12 +18,16 @@ base_url = "http://localhost:11434"
 mode = "optional"
 stages = ["expand", "rerank", "evidence", "rationale"]
 
-# Optional per-stage model overrides. Unlisted stages use the model above.
+# Optional per-stage provider/model overrides. Unlisted settings inherit from [llm].
 [profiles.default.llm.models]
-expand = "qwen3:8b"
+expand = "qwen3:8b" # shorthand: same provider and connection settings as [llm]
 rerank = "rnj-1"
 evidence = "gemma3:4b"
-rationale = "gemma3:4b"
+
+# Codex uses the locally installed CLI and its existing ChatGPT authentication.
+[profiles.default.llm.models.rationale]
+provider = "codex"
+model = "gpt-6-luna"
 
 # Optional chunk-level evidence-role labels. Enabling this requires a rebuild.
 [profiles.default.classification]

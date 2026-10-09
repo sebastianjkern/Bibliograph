@@ -281,7 +281,7 @@ def _llm_tools(
 
     fallbacks = _deterministic_llm_tools(stages)
     model_overrides = llm_settings.get("models", {})
-    chats: dict[str, Any] = {}
+    chats: dict[tuple[Any, ...], Any] = {}
 
     def stage_tool(
         stage: str, label: str, factory: Callable, fallback: Callable | None = None
@@ -293,13 +293,21 @@ def _llm_tools(
             "rationale": "explain",
         }
         fallback_tool = fallback or fallbacks.get(fallback_keys[stage])
-        model = model_overrides.get(stage, llm_settings["model"])
+        override = model_overrides.get(stage, {})
+        if isinstance(override, str):
+            override = {"model": override}
+        stage_settings = dict(llm_settings)
+        stage_settings.update(override)
+        cache_key = (
+            stage_settings.get("provider"),
+            stage_settings.get("model"),
+            stage_settings.get("base_url"),
+            stage_settings.get("api_key"),
+        )
         try:
-            if model not in chats:
-                stage_settings = dict(llm_settings)
-                stage_settings["model"] = model
-                chats[model] = build_chat({**settings, "llm": stage_settings})
-            primary = factory(chats[model]["complete"])
+            if cache_key not in chats:
+                chats[cache_key] = build_chat({**settings, "llm": stage_settings})
+            primary = factory(chats[cache_key]["complete"])
         except Exception as error:
             if mode == "required":
                 raise

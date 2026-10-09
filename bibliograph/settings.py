@@ -323,15 +323,41 @@ def _validate(settings: Mapping[str, Any]) -> None:
         )
     models = llm.get("models", {})
     if not isinstance(models, Mapping):
-        raise ValueError("llm.models must be a table mapping stages to model names")
+        raise ValueError("llm.models must be a table mapping stages to model settings")
     unknown_model_stages = sorted(set(models) - _LLM_STAGES)
     if unknown_model_stages:
         raise ValueError(
             "llm.models contains unknown stage(s): "
             f"{', '.join(unknown_model_stages)}; choose from {', '.join(sorted(_LLM_STAGES))}"
         )
-    if any(not isinstance(model, str) or not model.strip() for model in models.values()):
-        raise ValueError("llm.models values must be non-empty model names")
+    for stage, override in models.items():
+        if isinstance(override, str):
+            if not override.strip():
+                raise ValueError(f"llm.models.{stage} must be a non-empty model name")
+            continue
+        if not isinstance(override, Mapping):
+            raise ValueError(
+                f"llm.models.{stage} must be a model name or a table of provider settings"
+            )
+        unknown_options = sorted(set(override) - {"provider", "model", "base_url", "api_key"})
+        if unknown_options:
+            raise ValueError(
+                f"llm.models.{stage} contains unsupported setting(s): "
+                f"{', '.join(unknown_options)}"
+            )
+        if "provider" in override and resolve_name(override["provider"], kind="chat") is None:
+            raise ValueError(
+                f"llm.models.{stage}.provider must be one of: {', '.join(chat_names())}"
+            )
+        if "model" in override and (
+            not isinstance(override["model"], str) or not override["model"].strip()
+        ):
+            raise ValueError(f"llm.models.{stage}.model must be a non-empty model name")
+        for option in ("base_url", "api_key"):
+            if option in override and override[option] is not None and not isinstance(
+                override[option], str
+            ):
+                raise ValueError(f"llm.models.{stage}.{option} must be a string")
     if (
         not isinstance(acquisition, Mapping)
         or not isinstance(acquisition.get("order"), list)

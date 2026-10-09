@@ -1,8 +1,6 @@
 from dataclasses import FrozenInstanceError
 
 import pytest
-
-from bibliograph.domain import Chunk, Paper, citation_label
 from adapters.providers.model_runtimes import (
     ProviderError,
     build_chat,
@@ -11,6 +9,8 @@ from adapters.providers.model_runtimes import (
     embedding_names,
     names,
 )
+
+from bibliograph.domain import Chunk, Paper, citation_label
 
 
 def test_domain_records_are_frozen_slotted_and_transient_shapes_are_simple():
@@ -27,8 +27,8 @@ def test_domain_records_are_frozen_slotted_and_transient_shapes_are_simple():
 
 def test_registry_exposes_capability_specific_factory_names():
     assert set(embedding_names()) == {"hash", "ollama", "openai", "sentence-transformers"}
-    assert set(chat_names()) == {"ollama", "openai"}
-    assert set(names()) == set(embedding_names())
+    assert set(chat_names()) == {"codex", "ollama", "openai"}
+    assert set(names()) == set(embedding_names()) | {"codex"}
 
 
 def test_hash_runtime_keeps_document_and_query_encoders_separate():

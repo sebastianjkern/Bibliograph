@@ -188,6 +188,48 @@ def test_evidence_classification_is_opt_in_and_requires_llm(monkeypatch):
         })
 
 
+def test_settings_accepts_stage_provider_and_model_overrides(monkeypatch):
+    _clear_environment(monkeypatch)
+
+    settings = load_settings(
+        overrides={
+            "llm": {
+                "models": {
+                    "expand": "local-model",
+                    "rationale": {
+                        "provider": "openai",
+                        "model": "reasoning-model",
+                        "base_url": "https://openai.example/v1",
+                    },
+                }
+            }
+        }
+    )
+
+    assert settings["llm"]["models"]["expand"] == "local-model"
+    assert settings["llm"]["models"]["rationale"] == {
+        "provider": "openai",
+        "model": "reasoning-model",
+        "base_url": "https://openai.example/v1",
+    }
+
+
+@pytest.mark.parametrize(
+    "models",
+    [
+        {"rationale": {"provider": "missing", "model": "m"}},
+        {"rationale": {"model": "  "}},
+        {"rationale": {"unexpected": "value"}},
+        {"rationale": 42},
+    ],
+)
+def test_settings_rejects_invalid_stage_provider_overrides(models, monkeypatch):
+    _clear_environment(monkeypatch)
+
+    with pytest.raises(ValueError, match="llm.models"):
+        load_settings(overrides={"llm": {"models": models}})
+
+
 def test_settings_accepts_provider_aliases_and_resolves_browser_environment(monkeypatch):
     _clear_environment(monkeypatch)
     monkeypatch.setenv("BIBLIOGRAPH_REMOTE_PLAYWRIGHT_PROFILE", "C:/profile")

@@ -532,19 +532,24 @@ def test_multiple_excerpts_per_paper_are_default_and_can_be_limited():
     ]
 
 
-def test_llm_stage_model_overrides_are_passed_to_matching_chat_runtimes(monkeypatch):
+def test_llm_stage_provider_and_model_overrides_use_distinct_cached_runtimes(monkeypatch):
     settings = _hash_settings("unused.db")
     settings["llm"] = {
         "provider": "ollama",
         "model": "shared-model",
+        "base_url": "http://ollama.test",
+        "api_key": None,
         "mode": "required",
         "stages": ["expand", "rerank", "evidence", "rationale"],
-        "models": {"expand": "expand-model", "evidence": "evidence-model"},
+        "models": {
+            "expand": "expand-model",
+            "evidence": {"provider": "openai", "model": "evidence-model"},
+        },
     }
-    configured_models = []
+    configured = []
 
     def build_chat(config):
-        configured_models.append(config["llm"]["model"])
+        configured.append(config["llm"].copy())
         return {"complete": lambda *_args, **_kwargs: "{}"}
 
     monkeypatch.setattr("bibliograph.bootstrap.build_chat", build_chat)
@@ -552,7 +557,12 @@ def test_llm_stage_model_overrides_are_passed_to_matching_chat_runtimes(monkeypa
     tools = bootstrap._llm_tools(settings)
 
     assert set(tools) == {"expand", "refine", "rerank", "select_evidence", "explain"}
-    assert configured_models == ["shared-model", "expand-model", "evidence-model"]
+    assert [(item["provider"], item["model"]) for item in configured] == [
+        ("ollama", "shared-model"),
+        ("ollama", "expand-model"),
+        ("openai", "evidence-model"),
+    ]
+    assert configured[2]["base_url"] == "http://ollama.test"
 
 
 def test_query_expansion_parses_typed_alternatives():

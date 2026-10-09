@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from bibliograph.cli import _disabled_llm_stages, _settings_overrides, build_parser, main
+from bibliograph.cli import (
+    _disabled_llm_stages,
+    _llm_stage_overview,
+    _settings_overrides,
+    build_parser,
+    main,
+)
 from bibliograph.commands.search import _assessment_progress_text, _progress_description
 
 
@@ -46,6 +52,43 @@ def test_help_reports_the_resolved_provider_configuration(monkeypatch, capsys):
     assert "edtorre/gemma4:12qat-hermes" in output
     assert "ollama" in output
     assert "rerank, evidence" in output
+
+
+def test_overview_resolves_each_stage_provider_and_active_state():
+    llm = {
+        "provider": "ollama",
+        "model": "shared-model",
+        "mode": "optional",
+        "stages": ["expand", "evidence"],
+        "models": {
+            "rationale": {"provider": "codex", "model": "gpt-6-luna"},
+            "evidence": "evidence-model",
+        },
+    }
+
+    overview = _llm_stage_overview(llm)
+
+    assert overview == [
+        ("Query expansion", "ollama", "shared-model", True),
+        ("Reranking", "ollama", "shared-model", False),
+        ("Evidence selection", "ollama", "evidence-model", True),
+        ("Rationale", "codex", "gpt-6-luna", False),
+    ]
+
+
+def test_overview_marks_all_stages_inactive_when_llm_is_off():
+    overview = _llm_stage_overview(
+        {
+            "provider": "ollama",
+            "model": "shared-model",
+            "mode": "off",
+            "stages": ["rationale"],
+            "models": {"rationale": {"provider": "codex", "model": "gpt-6-luna"}},
+        }
+    )
+
+    assert all(not enabled for _, _, _, enabled in overview)
+    assert overview[-1][:3] == ("Rationale", "codex", "gpt-6-luna")
 
 
 def test_assessment_progress_colors_relations_and_keeps_other_text_neutral():

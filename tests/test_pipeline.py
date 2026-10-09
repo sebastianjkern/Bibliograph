@@ -244,6 +244,7 @@ def test_cross_paper_synthesis_preserves_relations_and_source_provenance():
     }
     assert synthesis["scope_variation"]["population"] == ["adults", "children"]
     assert "papers disagree" in synthesis["summary"]
+    assert "overall, the assessed evidence is mixed" in synthesis["conclusion"].lower()
     assert synthesis["sources"][0]["matched_quote"] == items[0]["matched_excerpt"]
 
 
@@ -271,6 +272,7 @@ def test_synthesis_of_multiple_passages_from_one_paper_does_not_claim_cross_pape
     assert synthesis["scope_variation"] == {}
     assert "Evidence from 1 paper across 2 assessed passages" in synthesis["summary"]
     assert "scope differs across papers" not in synthesis["summary"]
+    assert "supports the claim within the sources' reported scopes" in synthesis["conclusion"]
 
 
 def test_search_report_groups_passages_by_paper():
@@ -296,10 +298,10 @@ def test_search_report_groups_passages_by_paper():
 
     rendered = render_search([first, second])
 
-    assert rendered.count("## 1. One paper") == 1
-    assert "Additional passage · p. 5" in rendered
-    assert "supports (p. 4)" in rendered
-    assert "supports (p. 5)" in rendered
+    assert rendered.count("### Source 1: One paper") == 1
+    assert "#### Passage 1 · p. 4" in rendered
+    assert "#### Passage 2 · p. 5" in rendered
+    assert "**Passage-level assessment:** supports" in rendered
 
 
 def test_search_report_hides_unassessed_passages_unless_verbose():
@@ -353,9 +355,10 @@ def test_search_report_hides_unassessed_passages_unless_verbose():
             ],
         },
     )
-    assert "Cross-paper synthesis" in synthesis_report
-    assert "A study, p. 4" in synthesis_report
-    assert "Another study, p. 9" in synthesis_report
+    assert "Claim-level synthesis" in synthesis_report
+    assert "**Conclusion:**" in synthesis_report
+    assert "Source-level evidence" in synthesis_report
+    assert "#### Passage 1 · p. 4" in synthesis_report
 
 
 def test_rendered_references_are_sorted_by_support_score():
@@ -383,7 +386,9 @@ def test_rendered_references_are_sorted_by_support_score():
 
     report = render_search(items)
 
-    assert report.index("Road quality improves market access") < report.index("Infrastructure supports trade")
+    assert report.index("Road quality improves market access") < report.index(
+        "Infrastructure supports trade"
+    )
 
 
 def test_evidence_enrichment_prefers_sentence_excerpts_over_metadata_like_quotes():
@@ -530,33 +535,32 @@ def test_langgraph_search_refines_queries_from_retrieved_context():
     assert all(limit == 20 and include_trace for _request, limit, include_trace in requests)
     assert refinements[0][0] == "Claim about treatment and outcome"
     assert "Adjacent context clarifies the terminology" in refinements[0][1][0]
-    assert "Assessment gap/reason: The population and unit of analysis are unclear" in refinements[0][1][0]
+    assert (
+        "Assessment gap/reason: The population and unit of analysis are unclear"
+        in refinements[0][1][0]
+    )
     assert result["refinement_rounds"] == 1
-    assert result["refinement_trace"][0]["queries"] == [
-        "treatment effect on measured outcome"
-    ]
+    assert result["refinement_trace"][0]["queries"] == ["treatment effect on measured outcome"]
     assert result["candidate_queries"][followup.chunk_id] == [
         "treatment effect on measured outcome"
     ]
     supported_item = next(item for item in result["items"] if item["chunk"] == followup)
     expected_context = (
-        "Adjacent context clarifies the terminology. "
-        "The treatment increased the measured outcome."
+        "Adjacent context clarifies the terminology. The treatment increased the measured outcome."
     )
     assert supported_item["evidence"] == expected_context
     assert supported_item["matched_excerpt"] == "The treatment increased the measured outcome."
-    assert supported_item["rationale"] == "The source passage supports the claim within its stated scope."
+    assert supported_item["rationale"] == "The excerpt reports a finding."
     assert explanations == []
     assert supported_item["evidence_status"] == "supports"
     rendered_supported = render_search([supported_item])
     assert (
-        "⟦highlight⟧The treatment increased the measured outcome.⟦/highlight⟧"
-        in rendered_supported
+        "⟦highlight⟧The treatment increased the measured outcome.⟦/highlight⟧" in rendered_supported
     )
     assert "### Matched excerpt" not in rendered_supported
     unverified_item = next(item for item in result["items"] if item["chunk"] == initial)
     assert unverified_item["evidence_status"] == "insufficient"
-    assert "does not establish" in unverified_item["rationale"]
+    assert unverified_item["rationale"] == "The population and unit of analysis are unclear."
 
 
 def test_claim_only_expansion_is_fallback_when_initial_retrieval_has_no_candidates():
@@ -616,7 +620,13 @@ def test_langgraph_extends_local_context_before_query_refinement():
                 "relation": "supports",
                 "matched_quote": quote,
                 "reason": "The passage reports the outcome for the sampled clinics.",
-                "scope": {"population": "sampled clinics", "unit": "clinic", "outcome": "measured outcome", "geography": "", "time": ""},
+                "scope": {
+                    "population": "sampled clinics",
+                    "unit": "clinic",
+                    "outcome": "measured outcome",
+                    "geography": "",
+                    "time": "",
+                },
                 "quote_role": "finding",
                 "quote_directness": "direct",
             }
@@ -643,6 +653,7 @@ def test_langgraph_extends_local_context_before_query_refinement():
         "In the sampled clinics, the treatment increased the measured outcome."
     )
     assert item["evidence_scope"]["population"] == "sampled clinics"
+    assert item["rationale"] == "The passage reports the outcome for the sampled clinics."
     assert result["context_windows"][chunk.chunk_id] == 2
     assert result["refinement_rounds"] == 0
 
