@@ -1,58 +1,92 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg width="100%" height="100%" viewBox="0 0 1280 640" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;">
-    <path d="M1280,28L1280,612C1280,627.454 1267.454,640 1252,640L28,640C12.546,640 0,627.454 0,612L0,28C0,12.546 12.546,0 28,0L1252,0C1267.454,0 1280,12.546 1280,28Z" style="fill:url(#_Linear1);"/>
-    <circle cx="1080" cy="72" r="310" style="fill:url(#_Linear2);"/>
-    <path d="M1252,48L1252,592C1252,603.038 1243.038,612 1232,612L48,612C36.962,612 28,603.038 28,592L28,48C28,36.962 36.962,28 48,28L1232,28C1243.038,28 1252,36.962 1252,48Z" style="fill:none;"/>
-    <g>
-        <path d="M886,142L1015,104L1132,178L1181,302L1088,407L951,376L886,142Z" style="fill:none;fill-rule:nonzero;stroke:rgb(165,180,252);stroke-opacity:0.35;stroke-width:2px;"/>
-        <path d="M1015,104L1088,407M1132,178L951,376M886,142L1181,302" style="fill:none;fill-rule:nonzero;stroke:rgb(165,180,252);stroke-opacity:0.35;stroke-width:2px;"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="800" viewBox="0 0 1600 800">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbfcff"/>
+      <stop offset="1" stop-color="#eef1ff"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="1" stop-color="#7c3aed"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#25305b" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="800" rx="36" fill="url(#background)"/>
+  <circle cx="1435" cy="70" r="300" fill="#c7d2fe" opacity="0.22"/>
+  <circle cx="1510" cy="705" r="260" fill="#ddd6fe" opacity="0.30"/>
+  <path d="M0 650 C260 570 390 740 650 680 S1080 560 1600 650 V800 H0Z" fill="#e7eaff" opacity="0.58"/>
+
+  <g font-family="Inter, Arial, sans-serif">
+    <g transform="translate(112 190)">
+      <rect width="74" height="74" rx="21" fill="url(#accent)"/>
+      <path d="M18 21 Q31 16 37 24 Q43 16 56 21 V55 Q44 50 37 58 Q30 50 18 55Z" fill="none" stroke="#fff" stroke-width="3.5" stroke-linejoin="round"/>
+      <path d="M37 24V57" stroke="#c7d2fe" stroke-width="3"/>
+      <circle cx="53" cy="19" r="5" fill="#a5b4fc"/>
     </g>
-    <g>
-        <circle cx="886" cy="142" r="5" style="fill:rgb(199,210,254);"/>
-        <circle cx="1015" cy="104" r="5" style="fill:rgb(199,210,254);"/>
-        <circle cx="1132" cy="178" r="5" style="fill:rgb(199,210,254);"/>
-        <circle cx="1181" cy="302" r="5" style="fill:rgb(199,210,254);"/>
-        <circle cx="1088" cy="407" r="5" style="fill:rgb(199,210,254);"/>
-        <circle cx="951" cy="376" r="5" style="fill:rgb(199,210,254);"/>
+    <text x="112" y="350" fill="#171b35" font-size="82" font-weight="750" letter-spacing="-3">Bibliograph</text>
+    <rect x="116" y="383" width="92" height="7" rx="4" fill="url(#accent)"/>
+    <text x="112" y="458" fill="#343b5b" font-size="34" font-weight="600">Find evidence. Verify claims.</text>
+    <text x="112" y="505" fill="#343b5b" font-size="34" font-weight="600">Cite with confidence.</text>
+    <text x="112" y="578" fill="#737b98" font-size="22">Grounded research, connected to your library.</text>
+    <g transform="translate(112 664)" fill="#747d9d" font-size="15" font-weight="700" letter-spacing="2">
+      <text x="0" y="0">LOCAL SOURCES</text>
+      <circle cx="151" cy="-5" r="3.5" fill="#6366f1"/>
+      <text x="171" y="0">TRACEABLE EVIDENCE</text>
+      <circle cx="374" cy="-5" r="3.5" fill="#6366f1"/>
+      <text x="394" y="0">BETTER CITATIONS</text>
     </g>
-    <g transform="matrix(1,0,0,1,804,164)">
-        <path d="M0,62C58,25 121,28 178,66L178,306C119,270 59,270 0,305L0,62Z" style="fill:url(#_Linear3);fill-rule:nonzero;"/>
-        <path d="M178,66C235,28 298,25 356,62L356,305C297,270 237,270 178,306L178,66Z" style="fill:rgb(224,231,255);fill-rule:nonzero;"/>
-        <path d="M178,66L178,306" style="fill:none;fill-rule:nonzero;stroke:rgb(99,102,241);stroke-width:7px;stroke-linecap:round;"/>
-        <path d="M37,105C79,84 117,86 151,104M37,139C79,118 117,120 151,138M37,173C79,152 117,154 151,172M205,104C239,86 277,84 319,105M205,138C239,120 277,118 319,139M205,172C239,154 277,152 319,173" style="fill:none;fill-rule:nonzero;stroke:rgb(99,102,241);stroke-opacity:0.52;stroke-width:8px;stroke-linecap:round;"/>
-        <path d="M288,70L288,151L311,132L334,151L334,58" style="fill:rgb(129,140,248);fill-rule:nonzero;"/>
+
+    <g filter="url(#shadow)">
+      <rect x="710" y="187" width="245" height="300" rx="22" fill="#fff"/>
+      <rect x="730" y="207" width="205" height="260" rx="14" fill="#f8f9ff" stroke="#e4e7f5"/>
+      <text x="750" y="244" fill="#737b98" font-size="13" font-weight="700" letter-spacing="1.4">YOUR LIBRARY</text>
+      <g transform="translate(750 266)">
+        <rect width="165" height="72" rx="10" fill="#fff" stroke="#e4e7f5"/>
+        <rect x="12" y="14" width="34" height="44" rx="4" fill="#e0e7ff"/>
+        <path d="M19 25h20M19 32h20M19 39h15" stroke="#6366f1" stroke-width="2" stroke-linecap="round"/>
+        <text x="57" y="31" fill="#272d48" font-size="13" font-weight="700">Market access</text>
+        <text x="57" y="50" fill="#8289a3" font-size="11">Journal article · 2023</text>
+      </g>
+      <g transform="translate(750 350)">
+        <rect width="165" height="72" rx="10" fill="#fff" stroke="#e4e7f5"/>
+        <rect x="12" y="14" width="34" height="44" rx="4" fill="#ede9fe"/>
+        <path d="M19 25h20M19 32h20M19 39h15" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round"/>
+        <text x="57" y="31" fill="#272d48" font-size="13" font-weight="700">Rural transport</text>
+        <text x="57" y="50" fill="#8289a3" font-size="11">Working paper · 2021</text>
+      </g>
     </g>
-    <g transform="matrix(1,0,0,1,112,162)">
-        <g transform="matrix(1,0,0,1,0,138)">
-            <text x="0px" y="0px" style="font-family:'Arial-BoldMT', 'Arial', sans-serif;font-weight:700;font-size:90px;fill:rgb(248,250,252);">B<tspan x="61.395px 82.8px 134.176px 155.58px 176.985px 228.361px 279.737px 311.161px 357.615px 408.99px " y="0px 0px 0px 0px 0px 0px 0px 0px 0px 0px ">ibliograph</tspan></text>
-        </g>
-        <path d="M92,180C92,181.656 90.656,183 89,183L5,183C3.344,183 2,181.656 2,180C2,178.344 3.344,177 5,177L89,177C90.656,177 92,178.344 92,180Z" style="fill:rgb(129,140,248);"/>
-        <g transform="matrix(1,0,0,1,0,243)">
-            <text x="0px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:31px;fill:rgb(199,210,254);">Organize. Cite. Discover<tspan x="334.234px " y="0px ">.</tspan></text>
-        </g>
-        <g transform="matrix(1,0,0,1,0,307)">
-            <text x="0px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:20px;fill:rgb(148,163,184);">A<tspan x="12.236px 17.793px " y="0px 0px "> c</tspan>alm place for the ideas that move your work forward.</text>
-        </g>
+
+    <path d="M970 337 H1032" fill="none" stroke="#818cf8" stroke-width="4" stroke-linecap="round"/>
+    <path d="M1023 327 L1034 337 L1023 347" fill="none" stroke="#6366f1" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="1001" cy="337" r="6" fill="#a5b4fc"/>
+
+    <g filter="url(#shadow)">
+      <rect x="1044" y="228" width="225" height="220" rx="22" fill="#fff"/>
+      <text x="1070" y="269" fill="#737b98" font-size="13" font-weight="700" letter-spacing="1.4">YOUR CLAIM</text>
+      <text x="1070" y="320" fill="#272d48" font-size="20" font-weight="650">Does transport</text>
+      <text x="1070" y="349" fill="#272d48" font-size="20" font-weight="650">infrastructure improve</text>
+      <text x="1070" y="378" fill="#272d48" font-size="20" font-weight="650">market access?</text>
+      <rect x="1070" y="401" width="103" height="26" rx="13" fill="#eef2ff"/>
+      <circle cx="1085" cy="414" r="4" fill="#6366f1"/>
+      <text x="1096" y="419" fill="#565f91" font-size="11" font-weight="700">SEARCHING</text>
     </g>
-    <g transform="matrix(1,0,0,1,112,521)">
-        <text x="0px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:16px;fill:rgb(148,163,184);">R<tspan x="11.875px 22.867px 33.858px 45.733px 50.498px 62.373px 73.365px 84.357px 95.349px 103.38px " y="0px 0px 0px 0px 0px 0px 0px 0px 0px 0px ">EAD DEEPLY</tspan></text>
-        <g transform="matrix(1,0,0,1,-3.573325,0)">
-            <circle cx="145" cy="-6" r="3" style="fill:rgb(129,140,248);"/>
-        </g>
-        <g transform="matrix(1,0,0,1,168.551787,0.698187)">
-            <text x="0px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:16px;fill:rgb(148,163,184);">T<tspan x="10.093px 21.968px 26.733px 38.608px 49.6px 54.365px 66.24px 75.458px 86.45px 97.442px 109.317px 117.348px " y="0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px ">HINK CLEARLY</tspan></text>
-        </g>
-        <g transform="matrix(1,0,0,1,-8.053413,0)">
-            <circle cx="332" cy="-6" r="3" style="fill:rgb(129,140,248);"/>
-        </g>
-        <g transform="matrix(1,0,0,1,350.274824,0.698187)">
-            <text x="0px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:16px;fill:rgb(148,163,184);">B<tspan x="10.992px 22.867px 27.632px 36.85px 48.725px 53.49px 64.482px 76.357px 89.122px 104.544px 113.762px 124.754px 136.629px 149.394px " y="0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px ">UILD KNOWLEDGE</tspan></text>
-        </g>
+
+    <path d="M1285 337 H1340" fill="none" stroke="#818cf8" stroke-width="4" stroke-linecap="round"/>
+    <path d="M1331 327 L1342 337 L1331 347" fill="none" stroke="#6366f1" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <g filter="url(#shadow)">
+      <rect x="1352" y="187" width="185" height="300" rx="22" fill="#fff"/>
+      <text x="1374" y="226" fill="#737b98" font-size="12" font-weight="700" letter-spacing="1.1">MATCHED EVIDENCE</text>
+      <rect x="1374" y="248" width="141" height="88" rx="11" fill="#f8f9ff"/>
+      <path d="M1387 267h114M1387 280h105M1387 293h90M1387 306h109" stroke="#c9cde0" stroke-width="5" stroke-linecap="round"/>
+      <rect x="1384" y="286" width="111" height="12" rx="4" fill="#c7d2fe" opacity="0.92"/>
+      <text x="1374" y="367" fill="#555d7c" font-size="12" font-weight="600">“Lower transport costs</text>
+      <text x="1374" y="386" fill="#555d7c" font-size="12" font-weight="600">increased access to</text>
+      <text x="1374" y="405" fill="#555d7c" font-size="12" font-weight="600">regional markets...”</text>
+      <rect x="1374" y="430" width="141" height="36" rx="10" fill="#eef2ff"/>
+      <text x="1387" y="453" fill="#4f46e5" font-size="12" font-weight="700">SOURCE · PAGE 12</text>
     </g>
-    <defs>
-        <linearGradient id="_Linear1" x1="0" y1="0" x2="1" y2="0" gradientUnits="userSpaceOnUse" gradientTransform="matrix(1280,640,-640,1280,0,0)"><stop offset="0" style="stop-color:rgb(17,24,39);stop-opacity:1"/><stop offset="0.58" style="stop-color:rgb(24,35,61);stop-opacity:1"/><stop offset="1" style="stop-color:rgb(49,46,129);stop-opacity:1"/></linearGradient>
-        <linearGradient id="_Linear2" x1="0" y1="0" x2="1" y2="0" gradientUnits="userSpaceOnUse" gradientTransform="matrix(620,620,-620,620,770,-238)"><stop offset="0" style="stop-color:rgb(129,140,248);stop-opacity:0.38"/><stop offset="1" style="stop-color:rgb(165,180,252);stop-opacity:0"/></linearGradient>
-        <linearGradient id="_Linear3" x1="0" y1="0" x2="1" y2="0" gradientUnits="userSpaceOnUse" gradientTransform="matrix(178,270.186187,-270.186187,178,0,35.813813)"><stop offset="0" style="stop-color:rgb(248,250,252);stop-opacity:1"/><stop offset="1" style="stop-color:rgb(199,210,254);stop-opacity:1"/></linearGradient>
-    </defs>
+  </g>
 </svg>

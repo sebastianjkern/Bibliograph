@@ -1,16 +1,14 @@
-![Bibliograph banner](./github-banner.svg)
+![Bibliograph banner](./github-banner.png)
 
 # Bibliograph
 
-Bibliograph finds grounded citation evidence in a local Zotero-backed paper library. [Ikarus](https://github.com/sebastianjkern/ikarus) provides its SQLite-backed vector, lexical, and graph retrieval infrastructure, while Bibliograph retains scientific-paper graph policy, PDF parsing, citation metadata, and presentation. Bibliograph can additionally use an LLM for query expansion, query-aware reranking, quote selection, and short rationales.
+Bibliograph finds evidence for claims in a local paper library and helps verify citation support. It indexes Zotero collections or local PDFs, then searches the index with hybrid vector, lexical, and graph retrieval. Search results include source details, an excerpt, and an explanation; optional LLM stages can expand queries, rerank candidates, select evidence, and write rationales.
 
-The project is organized around one configured pipeline selected at startup: provider adapters are independent from retrieval, indexing, persistence, and CLI parsing. A provider never reads command-line arguments or environment variables itself.
-
-### Example:
+[Ikarus](https://github.com/sebastianjkern/ikarus) provides the SQLite-backed retrieval infrastructure. Bibliograph supplies the paper-oriented indexing and citation workflow, provider adapters, CLI, and result presentation.
 
 ![Bibliograph example](./image.png)
 
-## Install or reinstall
+## Install
 
 Bibliograph requires Python 3.12 or newer and uses [uv](https://docs.astral.sh/uv/).
 
@@ -19,21 +17,21 @@ uv python install 3.12
 uv sync --extra all --extra dev
 ```
 
-To repair or reinstall the local development environment after pulling changes, run:
+To reinstall the development environment after pulling changes:
 
 ```bash
 uv sync --extra all --extra dev --reinstall
 ```
 
-`uv run bibliograph ...` always uses the project environment. The `all` extra installs PDF extraction, Zotero, local embedding, OpenAI-compatible, and remote-acquisition integrations; omit it and choose only the extras you need for a smaller installation. The browser fallback for remote PDF acquisition additionally needs:
+The `all` extra installs PDF extraction, Zotero, local embedding, OpenAI-compatible, and remote-acquisition integrations. You can omit it and install only the extras you need. The browser fallback for remote PDF acquisition also requires Chromium:
 
 ```bash
 uv run playwright install chromium
 ```
 
-## Configure a profile
+## Configure
 
-Copy the example profile, then adjust its collection, paths, and model choices:
+Copy the example configuration and edit it for your library and providers:
 
 ```bash
 cp bibliograph.toml.example bibliograph.toml
@@ -45,7 +43,7 @@ On Windows PowerShell:
 Copy-Item bibliograph.toml.example bibliograph.toml
 ```
 
-`bibliograph.toml` contains non-secret, semi-static choices. Profiles make it straightforward to keep separate local and hosted configurations:
+Configuration is organized into profiles. This example uses Ollama for embeddings and chat, and demonstrates model overrides for individual LLM tasks:
 
 ```toml
 [profiles.default]
@@ -56,27 +54,43 @@ collection = "My Collection"
 [profiles.default.embedding]
 provider = "ollama"
 model = "nomic-embed-text"
+base_url = "http://localhost:11434"
 batch_size = 32
 
 [profiles.default.llm]
 provider = "ollama"
-model = "rnj-1"
+model = "edtorre/gemma4:12qat-hermes" # default for stages without an override
+base_url = "http://localhost:11434"
 mode = "optional" # off, optional, or required
 stages = ["expand", "rerank", "evidence", "rationale"]
+
+[profiles.default.llm.models]
+expand = "qwen3:8b"
+rerank = "rnj-1"
+evidence = "gemma3:4b"
+rationale = "gemma3:4b"
 
 [profiles.default.acquisition]
 order = ["cache", "zotero-storage", "zotero-api", "remote"]
 ```
 
-Resolution is explicit: command-line override, then environment variable, then selected TOML profile, then built-in default. Put CLI overrides before the command, for example:
+`llm.models` is optional. Its keys are `expand`, `rerank`, `evidence`, and `rationale`; each value is a model name. An omitted stage uses `llm.model`. The provider, endpoint, and credentials in `[profiles.default.llm]` are shared by all stages. The `stages` list controls which tasks are enabled, independently of the model overrides.
+
+Choose a profile with `--profile`:
+
+```bash
+uv run bibliograph --profile local search "Road infrastructure improves regional market access"
+```
+
+Settings precedence is command-line override, environment variable, selected TOML profile, then built-in default. Put global CLI overrides before the command:
 
 ```bash
 uv run bibliograph --profile local --embedding-model nomic-embed-text sync
 ```
 
-## Secrets and Zotero
+### Secrets and providers
 
-Copy `.env.example` to `.env` and fill in the secrets that apply to your chosen adapters. The generic `BIBLIOGRAPH_*` variables are preferred; established `ZOTERO_*`, `OPENAI_*`, `OLLAMA_*`, and remote-acquisition variables remain supported for one transition release.
+Keep secrets in `.env` rather than in the TOML file. The generic `BIBLIOGRAPH_*` variables are preferred; established `ZOTERO_*`, `OPENAI_*`, `OLLAMA_*`, and remote-acquisition variables remain supported for compatibility.
 
 ```env
 BIBLIOGRAPH_ZOTERO_LIBRARY_ID=your_library_id
@@ -85,55 +99,79 @@ BIBLIOGRAPH_ZOTERO_API_KEY=your_api_key
 BIBLIOGRAPH_REMOTE_UNPAYWALL_EMAIL=you@example.org
 ```
 
-Use `BIBLIOGRAPH_ZOTERO_LIBRARY_TYPE=group` for a group library. Bibliograph checks configured and common Zotero storage locations before trying the Zotero API or legal remote sources.
+Set `BIBLIOGRAPH_ZOTERO_LIBRARY_TYPE=group` for a Zotero group library. Bibliograph checks configured and common Zotero storage locations before trying the Zotero API or legal remote sources.
 
-For the default Ollama profile, start Ollama and pull the selected models:
+For an Ollama profile, start Ollama and pull the embedding model and each chat model you have configured:
 
 ```bash
 ollama pull nomic-embed-text
+ollama pull edtorre/gemma4:12qat-hermes
+ollama pull qwen3:8b
 ollama pull rnj-1
+ollama pull gemma3:4b
 ```
 
-OpenAI-compatible servers use `provider = "openai"` with `base_url` and the relevant API-key environment variables. Local SentenceTransformers embeddings use `provider = "sentence-transformers"`; the deterministic `hash` embedding provider is useful for offline smoke tests.
+OpenAI-compatible chat and embedding providers use `provider = "openai"`, with `base_url` and the relevant API-key environment variable. Local SentenceTransformers embeddings use `provider = "sentence-transformers"`. The deterministic `hash` embedding provider is useful for offline smoke tests.
 
-When the `rerank` or `evidence` stages are enabled, Bibliograph requests structured JSON output from providers that support schemas. Reranking uses boolean and categorical judgments (direct entailment, claim-specific result, explicit finding, unsupported inference, evidence role, and source type) and calculates the final support score locally. This avoids treating arbitrary LLM-generated numeric scores as calibrated probabilities. OpenAI-compatible providers use strict JSON Schema output; Ollama receives the same schema through its native `format` field. Older injected chat callables fall back to generic JSON mode.
+With `llm.mode = "optional"`, provider or structured-output failures are logged and fall back to deterministic behavior. `required` makes such failures command errors; `off` disables LLM stages. Reranking and evidence extraction request structured JSON output. Reranking judgments are converted to a support score locally rather than relying on an LLM-generated numeric score.
 
 ## Commands
 
-`sync` and `ingest-pdfs` change the database. Search, check, and status do not update the index.
+`sync` and `ingest-pdfs` write to the index. `search`, `check`, and `status` are read-only.
 
 ```bash
-# Incrementally synchronize the configured or named Zotero collection.
+# Synchronize the configured collection, or name a collection explicitly.
 uv run bibliograph sync
 uv run bibliograph sync "My Collection"
 
-# Build a sibling staging database, validate it, and atomically replace the live one.
+# Build and validate a replacement index before swapping it into place.
 uv run bibliograph sync --rebuild
 
-# Index PDFs in a local directory (recursive by default; no Zotero required).
+# Index PDFs from a local directory; recursive by default.
 uv run bibliograph ingest-pdfs ./papers
 uv run bibliograph ingest-pdfs ./papers --non-recursive
 
-# Search the existing index for a claim.
+# Search the index for evidence supporting a claim.
 uv run bibliograph search "Road infrastructure improves regional market access"
 
-# Check a LaTeX or Typst draft using the existing index.
+# Keep at most one result excerpt from each paper (opt-in).
+uv run bibliograph search --one-per-paper "Road infrastructure improves regional market access"
+
+# Check a LaTeX or Typst draft against the existing index.
 uv run bibliograph check example.tex
 
-# Inspect database contents without loading providers or Zotero.
+# Inspect the index without loading providers or Zotero.
 uv run bibliograph status
 
-# Also test configured embedding/chat providers (and report diagnostics).
+# Also probe configured providers and Zotero access.
 uv run bibliograph status --probe
 ```
 
-`status --probe` also checks Zotero access. `search` and `check` accept `--limit`, `--min-score`, `--no-llm`, `--no-rerank`, `--no-evidence-extraction`, `--no-enrichment`, and `--output`. Use `--no-llm` to keep all optional LLM stages disabled; Ikarus performs deterministic hybrid and graph retrieval. `--no-enrichment` disables LLM evidence selection and rationale generation while retaining deterministic excerpts. With the `expand` stage enabled, the LLM generates bounded paraphrase, support, contradiction, causal, terminology, and related hypotheses for Ikarus's query plan. Ikarus deduplicates semantic and lexical seeds, expands them through Bibliograph's scientific-paper graph, and produces the base ranking. An enabled LLM reranker then refines those candidates before Bibliograph keeps the strongest passage from each of the top 10 distinct articles for enrichment. A rebuild validates the exact embedding model before replacing the live database. If an embedding provider cannot be reached, the live database remains untouched. Optional LLM failures are logged and fall back deterministically; structured-output failures follow the same optional/required behavior, and `llm.mode = "required"` makes them command errors instead.
+### Search and check options
 
-Each database has one active Ikarus vector space and embedding fingerprint. A changed provider or model produces rebuild guidance rather than silently clearing vectors. Databases created by Bibliograph's legacy backend are recognized for status reporting but cannot be searched or incrementally synchronized; migrate them with `sync --rebuild`.
+Both `search` and `check` accept:
 
-For one compatibility release, `find-sources`/`find` delegate to `search`, `suggest` delegates to `check`, and `check DRAFT COLLECTION` runs a sync before checking. These shims issue deprecation warnings. The old global `--rebuild-db` spelling is also retained only for legacy use; prefer `sync --rebuild`.
+- `--limit N` and `--min-score SCORE` to adjust retrieval.
+- `--no-llm` to disable all LLM stages, or `--no-rerank` and `--no-evidence-extraction` to disable individual stages.
+- `--no-enrichment` to disable evidence selection and rationale generation while retaining deterministic excerpts.
+- `--output PATH` to write the Markdown report to a file.
 
-## Architecture
+`search` also accepts `--one-per-paper`. By default, search may return several useful excerpts from the same paper. Use this flag when you want no more than one excerpt per paper. Draft checking continues to select at most one result per claim.
+
+When query expansion is enabled, Bibliograph prints the generated alternative queries during the query-planning step, before candidate retrieval starts. The LLM creates bounded search hypotheses; Ikarus deduplicates semantic and lexical seeds, expands them through the paper graph, and ranks candidates. If reranking is enabled, it refines the candidates before excerpts are presented.
+
+A rebuild validates the configured embedding model before replacing the live database. If the embedding provider cannot be reached, the live database remains untouched. Each database has one active vector space and embedding fingerprint; changing the embedding provider or model requires a rebuild. Legacy databases remain inspectable with `status` but must be migrated with `sync --rebuild` before they can be searched or incrementally synchronized.
+
+For one compatibility release, `find-sources` and `find` delegate to `search`, `suggest` delegates to `check`, and `check DRAFT COLLECTION` synchronizes before checking. These commands issue deprecation warnings. Prefer `sync --rebuild` over the legacy `--rebuild-db` spelling.
+
+## Development
+
+```bash
+uv run ruff check .
+uv run pytest
+```
+
+The main package boundaries are:
 
 ```text
 bibliograph/
@@ -141,20 +179,11 @@ bibliograph/
   bootstrap.py    composition root and dependency lifetimes
   settings.py     TOML, environment, and CLI resolution
   domain.py       Paper and Chunk durable records
-  providers/      explicit embedding/chat factory registries
-  adapters/       Ikarus, legacy-status, Zotero, PDF, and acquisition adapters
-  pipeline/       citation result shaping, LLM tasks, and draft parsing
-  commands/       sync, PDF ingestion, search, check, and status use cases
-  render.py       pure Markdown rendering
+  providers/      embedding and chat provider factories
+  adapters/       Ikarus, Zotero, PDF, and acquisition adapters
+  pipeline/       retrieval, LLM tasks, indexing, and draft parsing
+  commands/       sync, PDF ingestion, search, check, and status workflows
+  render.py       Markdown rendering
 ```
 
-Adding a provider means adding one closure-based adapter, registering its factory, and testing its contract. Command handlers and pipeline tasks do not branch on provider names.
-
-## Development checks
-
-```bash
-uv run ruff check .
-uv run pytest
-```
-
-Always verify retrieved evidence before inserting a citation into a manuscript.
+Provider adapters are registered in `bibliograph/providers/registry.py`; command and pipeline code should not branch on provider names. Always verify retrieved evidence before inserting a citation into a manuscript.
