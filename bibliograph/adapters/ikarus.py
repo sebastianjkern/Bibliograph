@@ -8,6 +8,7 @@ import sqlite3
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -25,14 +26,107 @@ from core.knowledge.retrieval import QueryPlan
 from core.knowledge.vector_store import configure as configure_vector_store
 
 from ..domain import Chunk, Paper, RetrievalScore, ScoredChunk
-from .context import join_chunk_context
 from ..knowledge import KnowledgeDocument, QueryRequest, RetrievalResult, RetrievalTrace
 from ..pipeline.classification import PROFILE_VERSION
 from ..pipeline.indexing import INDEXING_FINGERPRINT
+from ..pipeline.timing import TimingRecorder
+from .context import join_chunk_context
 
 INDEX_SCHEMA_VERSION = 1
 GRAPH_PROFILE_FINGERPRINT = "bibliograph-paper-sections@1"
 LEXICAL_SCHEMA_VERSION = 1
+
+
+class _ReadCachedGraphStore:
+    """Bounded cache for immutable graph reads during a read-only search session."""
+
+    def __init__(self, store) -> None:
+        self._store = store
+        self._get_node = lru_cache(maxsize=50_000)(store.get_node)
+        self._get_edges = lru_cache(maxsize=50_000)(self._load_edges)
+
+    def _load_edges(self, identifier: str, relations: tuple[str, ...] | None):
+        return tuple(self._store.edges_from(identifier, relations))
+
+    def get_node(self, identifier: str):
+        return self._get_node(identifier)
+
+    def edges_from(self, identifier: str, relations: Sequence[str] | None = None):
+        relation_key = None if relations is None else tuple(relations)
+        return list(self._get_edges(identifier, relation_key))
+
+    def close(self) -> None:
+        self._get_node.cache_clear()
+        self._get_edges.cache_clear()
+        self._store.close()
+
+    def __getattr__(self, name: str):
+        return getattr(self._store, name)
+
+
+class _ProgressGraphStore:
+    """Report bounded graph traversal activity without changing graph results."""
+
+    def __init__(self, store, progress: Callable[[str], None]) -> None:
+        self._store = store
+        self._progress = progress
+        self._reads = 0
+
+    def _report_read(self) -> None:
+        self._reads += 1
+        if self._reads % 100 == 0:
+            self._progress(f"Graph expansion · {self._reads} node/edge lookups")
+
+    def get_node(self, identifier: str):
+        self._report_read()
+        return self._store.get_node(identifier)
+
+    def edges_from(self, identifier: str, relations: Sequence[str] | None = None):
+        self._report_read()
+        return self._store.edges_from(identifier, relations)
+
+    def __getattr__(self, name: str):
+        return getattr(self._store, name)
+
+
+class _ProgressGraphExpansion:
+    """Add stage messages around the unchanged graph expansion implementation."""
+
+    def __init__(self, progress: Callable[[str], None]) -> None:
+        self._progress = progress
+        self._expansion = PersonalizedPageRankExpansion()
+
+    def expand(self, seeds, store, *, max_depth, max_nodes, relations=None):
+        self._progress(
+            f"Graph expansion started · depth {max_depth}, at most {max_nodes} nodes"
+        )
+        hits = self._expansion.expand(
+            seeds,
+            store,
+            max_depth=max_depth,
+            max_nodes=max_nodes,
+            relations=relations,
+        )
+        self._progress(f"Graph expansion complete · {len(hits)} nodes")
+        return hits
+
+
+class _TimedGraphExpansion:
+    """Measure graph expansion without changing its inputs or results."""
+
+    def __init__(self, expansion, timings: TimingRecorder) -> None:
+        self._expansion = expansion
+        self._timings = timings
+
+    def expand(self, seeds, store, *, max_depth, max_nodes, relations=None):
+        with self._timings.measure("graph_expansion"):
+            return self._expansion.expand(
+                seeds,
+                store,
+                max_depth=max_depth,
+                max_nodes=max_nodes,
+                relations=relations,
+            )
 
 
 class IkarusIndexError(RuntimeError):
@@ -91,7 +185,8 @@ class IkarusBackend:
         if mode == "write" and not self.path.exists():
             self.path.parent.mkdir(parents=True, exist_ok=True)
         _configure_vectors(self.path)
-        self.graph = SQLiteGraphStore(self.path)
+        graph = SQLiteGraphStore(self.path)
+        self.graph = _ReadCachedGraphStore(graph) if mode == "read" else graph
         self.lexical = SQLiteFTSIndex(self.path)
         self.connection = sqlite3.connect(str(self.path))
         self.connection.row_factory = sqlite3.Row
@@ -297,6 +392,9 @@ class IkarusBackend:
         *,
         limit: int = 10,
         include_trace: bool = False,
+        progress: Callable[[str], None] | None = None,
+        query_vector: Sequence[float] | None = None,
+        timings: TimingRecorder | None = None,
     ) -> RetrievalResult:
         """Retrieve through the knowledge-engine boundary.
 
@@ -318,15 +416,69 @@ class IkarusBackend:
         )
         plan = QueryPlan.from_hypotheses(query, hypotheses)
         trace_payload: dict[str, object] | None = {} if include_trace else None
+
+        def report(message: str) -> None:
+            if progress is not None:
+                progress(message)
+
+        def embed_query(text: str) -> list[float]:
+            if query_vector is not None:
+                report("Using precomputed query embedding")
+                return list(query_vector)
+            report("Embedding query")
+            if timings is None:
+                vector = self.embedding["embed_queries"]([text])[0]
+            else:
+                with timings.measure("embedding"):
+                    vector = self.embedding["embed_queries"]([text])[0]
+            report("Query embedding complete")
+            return vector
+
+        def search_vectors(vector: list[float], k: int, filters):
+            report(f"Vector search · top {k}")
+            if timings is None:
+                hits = sqlite_vec.query(vector, k, filters)
+            else:
+                with timings.measure("vector_search"):
+                    hits = sqlite_vec.query(vector, k, filters)
+            report(f"Vector search complete · {len(hits)} candidates")
+            return hits
+
+        def search_lexically(text: str, k: int, filters):
+            report(f"Lexical search · top {k}")
+            if timings is None:
+                hits = self.lexical.search(text, k, filters)
+            else:
+                with timings.measure("lexical_search"):
+                    hits = self.lexical.search(text, k, filters)
+            report(f"Lexical search complete · {len(hits)} candidates")
+            return hits
+
+        graph_store = self.graph
+        graph_expansion = PersonalizedPageRankExpansion()
+        if progress is not None:
+            graph_store = _ProgressGraphStore(self.graph, progress)
+            graph_expansion = _ProgressGraphExpansion(progress)
+        if timings is not None:
+            graph_expansion = _TimedGraphExpansion(graph_expansion, timings)
         results = retrieve_rag(
             query,
             k=max(limit * 4, 12),
-            embedder=lambda text: self.embedding["embed_queries"]([text])[0],
-            vector_query=sqlite_vec.query,
+            embedder=embed_query if (progress is not None or timings is not None) else (
+                lambda text: self.embedding["embed_queries"]([text])[0]
+            ),
+            vector_query=(
+                search_vectors
+                if (progress is not None or timings is not None)
+                else sqlite_vec.query
+            ),
             metadata_reader=sqlite_vec.get_metadata,
             lexical_index=self.lexical,
-            graph_store=self.graph,
-            graph_expansion=PersonalizedPageRankExpansion(),
+            lexical_query=(
+                search_lexically if (progress is not None or timings is not None) else None
+            ),
+            graph_store=graph_store,
+            graph_expansion=graph_expansion,
             graph_max_depth=2,
             graph_max_nodes=max(100, limit * 12),
             graph_relations=("contains", "in_section", "next_chunk"),

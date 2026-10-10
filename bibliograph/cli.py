@@ -17,6 +17,7 @@ from rich.text import Text
 
 from .bootstrap import run_check, run_ingest_pdfs, run_search, run_status, run_sync
 from .logging_utils import configure_logging, get_logger
+from .pipeline.retrieval import DEFAULT_SEARCH_LIMIT
 from .render import render_sync
 from .settings import load_settings
 
@@ -104,11 +105,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check a LaTeX or Typst draft using the current index",
     )
     check.add_argument("draft", type=Path)
+    check.add_argument("--verbose", action="store_true", help="Show retrieval diagnostics")
     # A second positional preserves the former `check DRAFT COLLECTION` command
     # for one release.  The handler explicitly runs sync before the read-only check.
     check.add_argument("legacy_collection", nargs="?", help=argparse.SUPPRESS)
     _add_legacy_rebuild_argument(check)
     _add_query_options(check)
+    check.add_argument(
+        "--workers",
+        type=int,
+        default=2,
+        help="Parallel claim retrieval processes (default: 2; use 1 for sequential)",
+    )
 
     status = subparsers.add_parser(
         "status",
@@ -175,7 +183,7 @@ def _add_legacy_rebuild_argument(parser: argparse.ArgumentParser) -> None:
 def _add_query_options(
     parser: argparse.ArgumentParser, *, one_per_paper: bool = False
 ) -> None:
-    parser.add_argument("--limit", type=int, default=5)
+    parser.add_argument("--limit", type=int, default=DEFAULT_SEARCH_LIMIT)
     parser.add_argument("--min-score", type=float, default=0.0)
     parser.add_argument(
         "--no-llm",
@@ -295,6 +303,8 @@ def main(argv: list[str] | None = None) -> int:
                 disabled_stages=_disabled_llm_stages(args),
                 show_progress=not args.quiet,
                 enrich=not args.no_enrichment,
+                workers=getattr(args, "workers", 1),
+                verbose=getattr(args, "verbose", False),
             )
             _emit(result["markdown"], args.output)
             return 0
@@ -320,27 +330,40 @@ def _announce_command(args: argparse.Namespace, settings: dict[str, Any]) -> Non
     details = Table.grid(padding=(0, 1))
     details.add_column(style="bright_black")
     details.add_column(style="#767676")
+    details.add_row("[bold]Run[/bold]", "")
     details.add_row("Profile", str(args.profile))
+    if args.command in {"search", "legacy-search", "check", "legacy-suggest"}:
+        details.add_row("Sources", str(settings.get("db")))
+    details.add_row("[bold]Models[/bold]", "")
     details.add_row("Embeddings", f"{embedding.get('provider')} · {embedding.get('model')}")
     details.add_row("LLM default", f"{llm.get('provider')} · {llm.get('model')}")
     for stage, provider, model, enabled in _llm_stage_overview(llm):
-        status = "active" if enabled else "inactive"
-        details.add_row(f"LLM · {stage}", f"{provider} · {model} ({status})")
-    details.add_row("Index", str(settings.get("db")))
+        status = "[green]active[/green]" if enabled else "[bright_black]inactive[/bright_black]"
+        details.add_row(f"{stage}", f"{provider} · {model} · {status}")
+    if args.command not in {"search", "legacy-search", "check", "legacy-suggest"}:
+        details.add_row("Index", str(settings.get("db")))
     if args.command in {"search", "legacy-search"}:
         details.add_row("Task", "Find and rank evidence for one claim")
     elif args.command in {"check", "legacy-suggest"}:
         details.add_row("Task", "Check draft claims and suggest citations")
+        if args.command == "check":
+            details.add_row("Claim workers", str(args.workers))
     elif args.command == "sync":
         details.add_row("Task", "Sync collection PDFs")
     elif args.command in {"ingest-pdfs", "ingest"}:
         details.add_row("Task", "Index local PDFs")
     elif args.command == "status":
         details.add_row("Task", "Inspect index and provider readiness")
+    title = {
+        "search": "Bibliograph · Claim check",
+        "legacy-search": "Bibliograph · Claim check",
+        "check": "Bibliograph · Draft check",
+        "legacy-suggest": "Bibliograph · Draft check",
+    }.get(args.command, "Bibliograph")
     Console(stderr=True).print(
         Panel(
             details,
-            title="[bold cyan]Bibliograph[/bold cyan]",
+            title=f"[bold cyan]{title}[/bold cyan]",
             subtitle=f"[dim]{args.command}[/dim]",
             border_style="cyan",
             padding=(0, 1),
@@ -458,19 +481,35 @@ def _disabled_llm_stages(args: argparse.Namespace) -> tuple[str, ...]:
 
 
 def _emit(markdown: str, output: Path | None) -> None:
-    marker_pattern = re.compile(r"⟦highlight⟧(.*?)⟦/highlight⟧", re.DOTALL)
+    marker_pattern = re.compile(
+        r"⟦(?P<kind>highlight|support|partial|contradict|mixed)⟧"
+        r"(?P<text>.*?)⟦/(?P=kind)⟧",
+        re.DOTALL,
+    )
     if output is not None:
-        markdown = marker_pattern.sub(r"**\1**", markdown)
+        markdown = marker_pattern.sub(lambda match: match.group("text"), markdown)
         output.write_text(markdown, encoding="utf-8")
         get_logger("cli").info("Wrote report: %s", output)
         return
 
+    styles = {
+        "highlight": "bold black on yellow",
+        "support": "bold green",
+        "partial": "bold magenta",
+        "contradict": "bold red",
+        "mixed": "bold yellow",
+    }
     console = Console()
     position = 0
     for match in marker_pattern.finditer(markdown):
         if match.start() > position:
             console.print(Markdown(markdown[position : match.start()]), end="")
-        console.print(Text(match.group(1), style="bold black on yellow"), end="")
+        console.print(Text(match.group("text"), style=styles[match.group("kind")]), end="")
+        # Rich's Markdown parser strips leading whitespace from the next chunk.
+        # Preserve a separator that belongs between this styled phrase and the
+        # following plain text before passing that text back through Markdown.
+        if markdown[match.end() :].startswith(" "):
+            console.print(" ", end="")
         position = match.end()
     if position < len(markdown):
         console.print(Markdown(markdown[position:]), end="")

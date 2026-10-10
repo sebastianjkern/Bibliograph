@@ -1,6 +1,5 @@
 """Read-only single-claim search workflow."""
 
-import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -8,7 +7,8 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.text import Text
 
-from ..pipeline.retrieval import search_claim
+from ..pipeline.retrieval import DEFAULT_SEARCH_LIMIT, search_claim
+from ..pipeline.timing import format_workflow_timings
 from ..render import render_search
 
 
@@ -17,7 +17,7 @@ def search(
     *,
     backend,
     llm_tools: Mapping[str, Any],
-    limit: int = 5,
+    limit: int = DEFAULT_SEARCH_LIMIT,
     min_score: float = 0.0,
     show_progress: bool = True,
     enrich: bool = True,
@@ -28,8 +28,6 @@ def search(
     with progress_cm as progress:
 
         task_id = progress.add_task("Preparing search") if progress is not None else None
-        pending_assessment: list[str] = []
-
         def print_step(message: str | Text) -> None:
             if progress is not None:
                 line = Text("✓ ", style="green")
@@ -38,28 +36,29 @@ def search(
                 )
                 progress.console.print(line)
 
-        def flush_assessment(suffix: str = "") -> None:
-            if pending_assessment:
-                detail = pending_assessment.pop()
-                print_step(_assessment_progress_text(detail, suffix))
-
         def report_stage(description: str) -> None:
             if progress is None or task_id is None:
                 return
-            if description.startswith("Retrieved candidates"):
-                detail = description.removeprefix("Retrieved candidates · ")
-                print_step(f"Retrieval pass · {detail}")
-            elif description.startswith("Assessed evidence"):
-                pending_assessment.append(description.removeprefix("Assessed evidence · "))
-            elif description.startswith("Context extension"):
-                extension = description.removeprefix("Context extension · ")
-                flush_assessment(f" · {extension}")
-            elif description.startswith("Query extension"):
-                flush_assessment()
-                query_plan = description.removeprefix("Query extension · ")
-                print_step(f"Query planning · {query_plan}")
-            elif description.startswith("Evidence workflow complete"):
-                flush_assessment()
+            if description.startswith("Phase "):
+                progress.console.print(f"[bold cyan]{description}[/bold cyan]")
+            elif description.startswith("Review assessments ·"):
+                progress.console.print(f"[cyan]  {description}[/cyan]")
+            elif description.startswith("Follow-up query "):
+                line = Text("  ↳ ", style="cyan")
+                line.append(description.removeprefix("Follow-up query "), style="dim")
+                progress.console.print(line)
+            elif description.startswith((
+                "Retrieved initial evidence",
+                "Retrieved follow-up evidence",
+                "Assessed ",
+                "Reviewed ",
+                "Extended context for",
+                "Generated ",
+                "Selected passages",
+                "Selected final evidence",
+                "Synthesis generated",
+            )):
+                print_step(description)
             progress.update(
                 task_id,
                 description=_progress_description(description),
@@ -87,15 +86,16 @@ def search(
                 description="Search complete",
                 refresh=True,
             )
-            assessed = sum(
-                item.get("evidence_relation")
-                in {"supports", "partial", "contradicts", "mixed"}
-                for item in items
-            )
             progress.console.print(
-                f"[green]✓[/green] Search complete · {assessed} assessed passages · "
-                f"{result.get('refinement_rounds', 0)} query extension round(s)"
+                f"[bold green]Complete[/bold green] · "
+                f"{result['timings'].get('total', {}).get('seconds', 0.0):.2f}s · "
+                f"{result.get('refinement_rounds', 0)} additional search round(s)"
             )
+            timings = result.get("timings", {})
+            if timings:
+                progress.console.print(
+                    format_workflow_timings(timings, verbose=verbose)
+                )
     return {
         "result": result,
         "items": items,
@@ -108,29 +108,11 @@ def search(
     }
 
 
-def _assessment_progress_text(detail: str, suffix: str = "") -> Text:
-    relation_styles = {
-        "support": "bold green",
-        "partial": "bold magenta",
-        "contradict": "bold red",
-        "mixed": "bold yellow",
-        "unresolved": "bold cyan",
-    }
-    text = Text("Evidence assessment · ", style="dim")
-    relation_pattern = re.compile(
-        r"(?P<count>\d+)\s+(?P<relation>support|partial|contradict|mixed|unresolved)\b"
-    )
-    cursor = 0
-    for match in relation_pattern.finditer(detail):
-        text.append(detail[cursor : match.start()], style="dim")
-        text.append(match.group("count"), style=relation_styles[match.group("relation")])
-        text.append(" " + match.group("relation"), style=relation_styles[match.group("relation")])
-        cursor = match.end()
-    text.append(detail[cursor:] + suffix, style="dim")
-    return text
-
-
 def _progress_description(description: str) -> str:
+    if description.startswith("Phase "):
+        return description
+    if description.startswith("Assess passage ") or description.startswith("Review passage "):
+        return description
     if description.startswith("Plan query"):
         return "Searching the claim"
     if description.startswith("Retrieve candidates"):
@@ -140,13 +122,11 @@ def _progress_description(description: str) -> str:
     if description.startswith("Gathered context"):
         return description.replace("Gathered context", "Preparing source context", 1)
     if description.startswith("Reranking candidates"):
-        return description.replace("Reranking candidates", "Reranking passages", 1)
+        return description.replace("Reranking candidates", "Ranking passages", 1)
     if description.startswith("Assessed evidence"):
         return description.replace("Assessed evidence", "Evidence assessment", 1)
-    if description.startswith("Context extension"):
-        return description.replace("Context extension", "Extending local context", 1)
-    if description.startswith("Query extension"):
-        return description.replace("Query extension", "Planning follow-up queries", 1)
+    if description.startswith("Extended context for") or description.startswith("Generated "):
+        return description
     if description.startswith("Evidence workflow complete"):
         return "Finalizing evidence results"
     return description

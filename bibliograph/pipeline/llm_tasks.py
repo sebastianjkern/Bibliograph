@@ -93,6 +93,7 @@ _EVIDENCE_SCHEMA: dict[str, object] = {
         "scope",
         "quote_role",
         "quote_directness",
+        "components",
     ],
     "properties": {
         "relation": {
@@ -127,6 +128,24 @@ _EVIDENCE_SCHEMA: dict[str, object] = {
                 "outcome": {"type": "string"},
                 "geography": {"type": "string"},
                 "time": {"type": "string"},
+            },
+        },
+        "components": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["name", "status", "reason", "evidence_quote"],
+                "properties": {
+                    "name": {"type": "string"},
+                    "status": {
+                        "type": "string",
+                        "enum": ["established", "partial", "unresolved", "contradicted"],
+                    },
+                    "reason": {"type": "string"},
+                    "evidence_quote": {"type": "string"},
+                },
             },
         },
     },
@@ -500,6 +519,7 @@ def select_evidence(
     context: str,
     *,
     complete: Complete,
+    components: Sequence[str] | None = None,
 ) -> dict[str, object]:
     chunk, _score = hit
     messages = [
@@ -521,7 +541,30 @@ def select_evidence(
                 "claim, set relation to insufficient. Classify quote_role and quote_directness; "
                 "a non-insufficient assessment requires quote_directness=direct. The quote must "
                 "be exact text copied from CONTEXT; reason must be concise and source-grounded. "
-                "Also return scope fields population, unit, outcome, geography, and time. "
+                "Break CLAIM into its material factual components and assess each separately. "
+                "Return at least two components when CLAIM has multiple clauses or qualifiers; "
+                "never return an empty components list. "
+                "Include the core outcome, the claimed relationship, and every material "
+                "qualifier such as population, unit, geography, time, and magnitude. If "
+                "COMPONENTS are supplied, use those exact component names. For every component, "
+                "return established only when this passage establishes it at the claimed scope "
+                "and provide an exact component-specific evidence_quote copied from CONTEXT. "
+                "For partial or contradicted components, include the exact quote that supports "
+                "that classification; leave evidence_quote empty only when no relevant source "
+                "text is present. "
+                "partial when it establishes a narrower/different scope; unresolved when absent; "
+                "contradicted only when the source explicitly conflicts. A material qualifier "
+                "mismatch must prevent the whole claim from being called supported. In particular, "
+                "evaluate magnitude and comparison words such as minor, major, large, or strong "
+                "as material claim components: a number alone does not establish that an effect "
+                "is major or minor without an explicit source comparison or benchmark. Each "
+                "component reason must be concise and consistent with its status. If the reason "
+                "says the source does not establish, quantify, demonstrate, or measure a required "
+                "part, do not label that component established. Do not combine a positive finding "
+                "and an unresolved caveat under an established status. "
+                "distinguish conflict along routes serving a market from conflict occurring near "
+                "the market or settlement. Also return scope fields population, unit, outcome, "
+                "geography, and time. "
                 "Copy only what the context explicitly states; leave a field empty when unstated. "
                 "Do not infer contradiction from missing evidence. Use insufficient when the "
                 "context is topical but does not establish a relation, including when a table, "
@@ -537,7 +580,13 @@ def select_evidence(
                 f"CLAIM:\n{claim}\n\nSOURCE:\n{citation_label(chunk.paper)}, "
                 f"page {chunk.page or 'unknown'}\n"
                 f"\nCHUNK ROLE: {chunk.evidence_role or 'unknown'}"
-                f"\nCONTENT KIND: {chunk.content_kind}\n\nCONTEXT:\n{context}"
+                f"\nCONTENT KIND: {chunk.content_kind}\n"
+                + (
+                    "\nCOMPONENTS:\n" + "\n".join(f"- {value}" for value in components)
+                    if components
+                    else ""
+                )
+                + f"\n\nCONTEXT:\n{context}"
             ),
         },
     ]
@@ -565,7 +614,38 @@ def select_evidence(
         "scope": scope,
         "quote_role": str(payload.get("quote_role", "other")),
         "quote_directness": quote_directness,
+        "components": _normalise_claim_components(payload.get("components", []), context),
     }
+
+
+def _normalise_claim_components(value: object, context: str) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    allowed = {"established", "partial", "unresolved", "contradicted"}
+    components = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = " ".join(str(item.get("name", "")).split())
+        status = str(item.get("status", "unresolved")).casefold()
+        evidence_quote = " ".join(str(item.get("evidence_quote", "")).split())
+        if not name or name.casefold() in seen or status not in allowed:
+            continue
+        reason = " ".join(str(item.get("reason", "")).split())
+        if status == "established" and not contains_text(context, evidence_quote):
+            status = "unresolved"
+            reason = "No exact source quote was supplied for this component."
+        components.append(
+            {
+                "name": name,
+                "status": status,
+                "reason": reason,
+                "evidence_quote": evidence_quote,
+            }
+        )
+        seen.add(name.casefold())
+    return components
 
 
 def explain(claim: str, evidence: str, *, complete: Complete) -> str:

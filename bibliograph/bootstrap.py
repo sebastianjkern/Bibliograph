@@ -47,6 +47,7 @@ from .pipeline.llm_tasks import (
     select_evidence,
     template_rationale,
 )
+from .pipeline.retrieval import DEFAULT_SEARCH_LIMIT
 from .settings import Settings
 
 logger = get_logger("bootstrap")
@@ -141,7 +142,7 @@ def run_search(
     settings: Settings,
     claim: str,
     *,
-    limit: int = 5,
+    limit: int = DEFAULT_SEARCH_LIMIT,
     min_score: float = 0.0,
     no_llm: bool = False,
     disabled_stages: Iterable[str] = (),
@@ -178,13 +179,33 @@ def run_check(
     settings: Settings,
     draft: str | Path,
     *,
-    limit: int = 5,
+    limit: int = DEFAULT_SEARCH_LIMIT,
     min_score: float = 0.0,
     no_llm: bool = False,
     disabled_stages: Iterable[str] = (),
     show_progress: bool = True,
     enrich: bool = True,
+    workers: int = 1,
+    verbose: bool = False,
 ) -> dict:
+    if workers < 1:
+        raise ValueError("workers must be at least 1")
+    if workers > 1:
+        return check(
+            draft,
+            backend=None,
+            llm_tools={},
+            limit=limit,
+            min_score=min_score,
+            show_progress=show_progress,
+            enrich=enrich,
+            workers=workers,
+            verbose=verbose,
+            worker_settings=settings,
+            no_llm=no_llm,
+            disabled_stages=tuple(disabled_stages),
+        )
+
     embedding = build_embedding(settings)
     with IkarusBackend(
         settings["db"],
@@ -204,6 +225,7 @@ def run_check(
             min_score=min_score,
             show_progress=show_progress,
             enrich=enrich,
+            verbose=verbose,
         )
 
 
@@ -349,8 +371,11 @@ def _llm_tools(
         )
     if "evidence" in stages:
         tools["select_evidence"] = stage_tool(
-            "evidence", "evidence extraction", lambda complete: lambda claim, hit, context:
-            select_evidence(claim, hit, context, complete=complete)
+            "evidence",
+            "evidence extraction",
+            lambda complete: lambda claim, hit, context, components=None: select_evidence(
+                claim, hit, context, complete=complete, components=components
+            ),
         )
     if "rationale" in stages:
         tools["explain"] = stage_tool(
@@ -369,7 +394,7 @@ def _deterministic_llm_tools(stages: set[str]) -> dict[str, Callable]:
     if "rerank" in stages:
         tools["rerank"] = heuristic_rerank
     if "evidence" in stages:
-        tools["select_evidence"] = lambda _claim, _hit, _context: None
+        tools["select_evidence"] = lambda _claim, _hit, _context, components=None: None
     if "rationale" in stages:
         tools["explain"] = template_rationale
     return tools

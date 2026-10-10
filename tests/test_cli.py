@@ -2,6 +2,7 @@ from pathlib import Path
 
 from bibliograph.cli import (
     _disabled_llm_stages,
+    _emit,
     _llm_stage_overview,
     _settings_overrides,
     build_parser,
@@ -111,6 +112,19 @@ def test_assessment_progress_colors_relations_and_keeps_other_text_neutral():
         "10 passages" in segment and "dim" in str(style)
         for segment, style in styled_segments
     )
+
+
+def test_report_output_file_strips_terminal_color_markers(tmp_path):
+    output = tmp_path / "report.md"
+    _emit(
+        "Coverage: ⟦support⟧2 papers with supporting⟦/support⟧ and "
+        "⟦contradict⟧1 with contradicting⟦/contradict⟧.",
+        output,
+    )
+
+    rendered = output.read_text(encoding="utf-8")
+    assert rendered == "Coverage: 2 papers with supporting and 1 with contradicting."
+    assert "⟦" not in rendered
 
 
 def test_search_progress_uses_concise_workflow_state_labels():

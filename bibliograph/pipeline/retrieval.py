@@ -8,6 +8,14 @@ from inspect import signature
 from ..domain import Chunk, Claim, ScoredChunk
 from .llm_tasks import heuristic_rerank, template_rationale
 
+DEFAULT_SEARCH_LIMIT = 5
+
+
+def initial_retrieval_limit(search_limit: int) -> int:
+    """Return the candidate request size used by the evidence workflow."""
+    return max(10, search_limit * 4)
+
+
 EmbedQueries = Callable[[Sequence[str]], list[list[float]]]
 Search = Callable[..., list[ScoredChunk]]
 ContextFor = Callable[[Chunk], str]
@@ -24,7 +32,7 @@ def _search_claim_with_backend(
     claim: Claim,
     *,
     backend,
-    limit: int = 5,
+    limit: int = DEFAULT_SEARCH_LIMIT,
     min_score: float = 0.0,
     expand: Expand | None = None,
     refine: Callable[[str, Sequence[str]], list[str]] | None = None,
@@ -93,7 +101,7 @@ def _search_claim_with_explicit_search(
     *,
     embed_queries: EmbedQueries,
     search: Search,
-    limit: int = 5,
+    limit: int = DEFAULT_SEARCH_LIMIT,
     min_score: float = 0.0,
     expand: Expand | None = None,
     rerank: Rerank | None = None,
@@ -260,7 +268,7 @@ def retrieve_claims(
     *,
     embed_queries: EmbedQueries,
     search: Search,
-    limit: int = 5,
+    limit: int = DEFAULT_SEARCH_LIMIT,
     min_score: float = 0.0,
     expand: Expand | None = None,
     rerank: Rerank | None = None,

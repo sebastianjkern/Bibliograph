@@ -337,7 +337,10 @@ def test_search_report_hides_unassessed_passages_unless_verbose():
     synthesis_report = render_search(
         [supported],
         synthesis={
-            "summary": "Two assessed sources disagree.",
+            "summary": (
+                "Evidence from 2 papers across 2 assessed passages: 1 paper(s) with supporting, "
+                "0 with partial, 1 with contradicting, and 0 with mixed evidence."
+            ),
             "paper_count": 2,
             "sources": [
                 {
@@ -357,6 +360,8 @@ def test_search_report_hides_unassessed_passages_unless_verbose():
     )
     assert "Claim-level synthesis" in synthesis_report
     assert "**Conclusion:**" in synthesis_report
+    assert "⟦support⟧1 paper(s) with supporting⟦/support⟧" in synthesis_report
+    assert "⟦contradict⟧0 with contradicting⟦/contradict⟧" in synthesis_report
     assert "Source-level evidence" in synthesis_report
     assert "#### Passage 1 · p. 4" in synthesis_report
 
