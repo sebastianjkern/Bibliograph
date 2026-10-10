@@ -52,6 +52,9 @@ DEFAULT_SETTINGS: Settings = {
         "mode": "optional",
         "stages": ["rerank", "evidence", "rationale"],
         "models": {},
+        "rerank_strategy": "systemone",
+        "systemone_model": None,
+        "systemone_workers": 4,
     },
     "classification": {"enabled": False, "model": None},
     "acquisition": {
@@ -155,6 +158,9 @@ def _generic_environment() -> Settings:
         ("BIBLIOGRAPH_LLM_API_KEY", ("llm", "api_key"), str),
         ("BIBLIOGRAPH_LLM_MODE", ("llm", "mode"), str),
         ("BIBLIOGRAPH_LLM_STAGES", ("llm", "stages"), _as_csv),
+        ("BIBLIOGRAPH_LLM_RERANK_STRATEGY", ("llm", "rerank_strategy"), str),
+        ("BIBLIOGRAPH_SYSTEMONE_MODEL", ("llm", "systemone_model"), str),
+        ("BIBLIOGRAPH_SYSTEMONE_WORKERS", ("llm", "systemone_workers"), _as_int),
         ("BIBLIOGRAPH_ACQUISITION_ORDER", ("acquisition", "order"), _as_csv),
         ("BIBLIOGRAPH_REMOTE_UNPAYWALL_EMAIL", ("remote", "email"), str),
         ("BIBLIOGRAPH_REMOTE_OPENALEX_API_KEY", ("remote", "openalex_api_key"), str),
@@ -256,6 +262,9 @@ def _normalise_overrides(overrides: Mapping[str, Any]) -> Settings:
         "llm_base_url": ("llm", "base_url"),
         "llm_api_key": ("llm", "api_key"),
         "llm_mode": ("llm", "mode"),
+        "rerank_strategy": ("llm", "rerank_strategy"),
+        "systemone_model": ("llm", "systemone_model"),
+        "systemone_workers": ("llm", "systemone_workers"),
         "zotero_storage_dir": ("zotero", "storage_dir"),
         "zotero_library_id": ("zotero", "library_id"),
         "zotero_library_type": ("zotero", "library_type"),
@@ -312,6 +321,20 @@ def _validate(settings: Mapping[str, Any]) -> None:
     mode = llm.get("mode")
     if mode not in {"off", "optional", "required"}:
         raise ValueError("llm.mode must be one of: off, optional, required")
+    if llm.get("rerank_strategy") not in {"llm", "systemone"}:
+        raise ValueError("llm.rerank_strategy must be one of: llm, systemone")
+    systemone_model = llm.get("systemone_model")
+    if systemone_model is not None and (
+        not isinstance(systemone_model, str) or not systemone_model.strip()
+    ):
+        raise ValueError("llm.systemone_model must be a non-empty model name")
+    systemone_workers = llm.get("systemone_workers")
+    if (
+        not isinstance(systemone_workers, int)
+        or isinstance(systemone_workers, bool)
+        or systemone_workers <= 0
+    ):
+        raise ValueError("llm.systemone_workers must be a positive integer")
     stages = llm.get("stages")
     if not isinstance(stages, list) or not all(isinstance(stage, str) for stage in stages):
         raise ValueError("llm.stages must be a list of strings")

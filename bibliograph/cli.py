@@ -167,6 +167,12 @@ def _add_runtime_overrides(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--llm-model")
     parser.add_argument("--llm-base-url")
     parser.add_argument("--llm-mode", choices=("off", "optional", "required"))
+    parser.add_argument(
+        "--rerank-strategy",
+        choices=("llm", "systemone"),
+        help="Choose chat LLM reranking or an Ollama System One decision model",
+    )
+    parser.add_argument("--systemone-model", help="Ollama model name for System One reranking")
 
 
 def _add_legacy_rebuild_argument(parser: argparse.ArgumentParser) -> None:
@@ -386,11 +392,16 @@ def _llm_stage_overview(llm: dict[str, Any]) -> list[tuple[str, str, str, bool]]
         override = overrides.get(key, {})
         if isinstance(override, str):
             override = {"model": override}
+        provider = str(override.get("provider", llm.get("provider")))
+        model = str(override.get("model", llm.get("model")))
+        if key == "rerank" and llm.get("rerank_strategy", "systemone") == "systemone":
+            provider = "ollama"
+            model = str(llm.get("systemone_model") or "nimble (default)")
         overview.append(
             (
                 label,
-                str(override.get("provider", llm.get("provider"))),
-                str(override.get("model", llm.get("model"))),
+                provider,
+                model,
                 active_mode and key in enabled_stages,
             )
         )
@@ -465,6 +476,8 @@ def _settings_overrides(args: argparse.Namespace) -> dict[str, Any]:
         "llm_model": args.llm_model,
         "llm_base_url": args.llm_base_url,
         "llm_mode": args.llm_mode,
+        "rerank_strategy": args.rerank_strategy,
+        "systemone_model": args.systemone_model,
     }
     return {key: value for key, value in values.items() if value is not None}
 
@@ -482,7 +495,7 @@ def _disabled_llm_stages(args: argparse.Namespace) -> tuple[str, ...]:
 
 def _emit(markdown: str, output: Path | None) -> None:
     marker_pattern = re.compile(
-        r"⟦(?P<kind>highlight|support|partial|contradict|mixed)⟧"
+        r"⟦(?P<kind>highlight|support|partial|contradict|mixed|unresolved)⟧"
         r"(?P<text>.*?)⟦/(?P=kind)⟧",
         re.DOTALL,
     )
@@ -498,16 +511,37 @@ def _emit(markdown: str, output: Path | None) -> None:
         "partial": "bold magenta",
         "contradict": "bold red",
         "mixed": "bold yellow",
+        "unresolved": "bold cyan",
     }
     console = Console()
+    coverage_heading = "**Passage-level coverage:** "
+    coverage_start = markdown.find(coverage_heading)
+    if coverage_start >= 0:
+        paragraph_end = markdown.find("\n\n", coverage_start)
+        if paragraph_end < 0:
+            paragraph_end = len(markdown)
+        _emit_marked_markdown(markdown[:coverage_start], marker_pattern, styles, console)
+        paragraph = markdown[coverage_start + len(coverage_heading) : paragraph_end]
+        coverage_text = Text("Passage-level coverage:", style="bold")
+        coverage_text.append(" ")
+        position = 0
+        for match in marker_pattern.finditer(paragraph):
+            coverage_text.append(paragraph[position : match.start()])
+            coverage_text.append(match.group("text"), style=styles[match.group("kind")])
+            position = match.end()
+        coverage_text.append(paragraph[position:])
+        console.print(coverage_text, end="")
+        _emit_marked_markdown(markdown[paragraph_end:], marker_pattern, styles, console)
+        return
+    _emit_marked_markdown(markdown, marker_pattern, styles, console)
+
+
+def _emit_marked_markdown(markdown, marker_pattern, styles, console) -> None:
     position = 0
     for match in marker_pattern.finditer(markdown):
         if match.start() > position:
             console.print(Markdown(markdown[position : match.start()]), end="")
         console.print(Text(match.group("text"), style=styles[match.group("kind")]), end="")
-        # Rich's Markdown parser strips leading whitespace from the next chunk.
-        # Preserve a separator that belongs between this styled phrase and the
-        # following plain text before passing that text back through Markdown.
         if markdown[match.end() :].startswith(" "):
             console.print(" ", end="")
         position = match.end()

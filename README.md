@@ -63,6 +63,7 @@ model = "edtorre/gemma4:12qat-hermes" # default for stages without an override
 base_url = "http://localhost:11434"
 mode = "optional" # off, optional, or required
 stages = ["expand", "rerank", "evidence", "rationale"]
+rerank_strategy = "llm" # optional; default is "systemone"
 
 [profiles.default.llm.models]
 expand = "qwen3:8b"
@@ -75,6 +76,8 @@ order = ["cache", "zotero-storage", "zotero-api", "remote"]
 ```
 
 `llm.models` is optional. Its keys are `expand`, `rerank`, `evidence`, and `rationale`; each value is a model name. An omitted stage uses `llm.model`. The provider, endpoint, and credentials in `[profiles.default.llm]` are shared by all stages. The `stages` list controls which tasks are enabled, independently of the model overrides.
+
+Reranking uses Ikarus's typed Ollama System One decision model by default. It scores each passage with a typed `noul` relevance question. Set `systemone_model` to choose the Ollama decision model (defaults to the Ikarus/Ollama setting, normally `nimble`) and `systemone_workers` to choose concurrent passage decisions (default `4`). To use chat LLM reranking, set `rerank_strategy = "llm"` under `[profiles.default.llm]`. You can also select either strategy per command with `--rerank-strategy systemone` or `--rerank-strategy llm`.
 
 Ingest-time evidence-role classification is separately opt-in with `[profiles.default.classification] enabled = true`. It labels chunks as background, data, methods, results, robustness, discussion, or limitations, and stores classifier scores in the index. It uses the configured chat provider and `llm.model` unless `classification.model` overrides it. Classification adds model calls during indexing; optional LLM mode leaves a chunk unclassified if a call fails. Enabling or changing the profile requires `sync --rebuild` before searching the index.
 

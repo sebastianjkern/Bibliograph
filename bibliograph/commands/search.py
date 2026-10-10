@@ -1,5 +1,6 @@
 """Read-only single-claim search workflow."""
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -31,9 +32,10 @@ def search(
         def print_step(message: str | Text) -> None:
             if progress is not None:
                 line = Text("✓ ", style="green")
-                line.append_text(
-                    message if isinstance(message, Text) else Text(message, style="dim")
-                )
+                if isinstance(message, Text):
+                    line.append_text(message)
+                else:
+                    line.append_text(_style_relation_counts(message))
                 progress.console.print(line)
 
         def report_stage(description: str) -> None:
@@ -106,6 +108,25 @@ def search(
             synthesis=result.get("synthesis"),
         ),
     }
+
+
+def _style_relation_counts(message: str) -> Text:
+    styles = {
+        "supporting": "bold green",
+        "partial": "bold magenta",
+        "contradicting": "bold red",
+        "mixed": "bold yellow",
+        "unresolved": "bold cyan",
+    }
+    pattern = re.compile(r"\b\d+ (supporting|partial|contradicting|mixed|unresolved)\b")
+    line = Text()
+    position = 0
+    for match in pattern.finditer(message):
+        line.append(message[position : match.start()], style="dim")
+        line.append(match.group(), style=styles[match.group(1)])
+        position = match.end()
+    line.append(message[position:], style="dim")
+    return line
 
 
 def _progress_description(description: str) -> str:

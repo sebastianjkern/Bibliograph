@@ -15,7 +15,7 @@ def render_search(
     synthesis: dict | None = None,
 ) -> str:
     items = _sorted_items(items)
-    claim = items[0]["claim"]["text"] if items else (claim or "")
+
     assessed_relations = {"supports", "partial", "contradicts", "mixed", "insufficient"}
     assessed = [
         item
@@ -24,29 +24,10 @@ def render_search(
     ]
     displayable = [item for item in assessed if item.get("evidence_relation") != "insufficient"]
     shown = items if verbose else displayable[:3]
-    lines = ["# Local sources", "", f"> Claim: {claim}", ""]
-    relation_counts = {
-        relation: sum(item.get("evidence_relation") == relation for item in assessed)
-        for relation in ("supports", "partial", "contradicts", "mixed", "insufficient")
-    }
-    selected_papers = {item["chunk"].paper.zotero_key for item in items}
-    assessed_papers = {item["chunk"].paper.zotero_key for item in assessed}
-    not_assessed = len(items) - len(assessed)
-    selected_paper_label = "paper" if len(selected_papers) == 1 else "papers"
-    assessed_paper_label = "paper" if len(assessed_papers) == 1 else "papers"
-    lines.extend(
-        [
-            "**Passage accounting:** "
-            f"{len(items)} selected across {len(selected_papers)} source {selected_paper_label}; "
-            f"{len(assessed)} assessed across {len(assessed_papers)} source {assessed_paper_label} "
-            f"({relation_counts['supports']} supporting, {relation_counts['partial']} partial, "
-            f"{relation_counts['contradicts']} contradicting, {relation_counts['mixed']} mixed, "
-            f"{relation_counts['insufficient']} unresolved); {not_assessed} not assessed.",
-            "",
-        ]
-    )
+    lines = ["# Local sources", ""]
+
     synthesis_lines = (
-        _render_claim_synthesis(synthesis, heading="## Claim-level synthesis")
+        _render_claim_synthesis(synthesis, heading="")
         if synthesis and synthesis.get("sources")
         else []
     )
@@ -57,11 +38,12 @@ def render_search(
                 "Retrieved passages were not sufficient to verify a relation to the claim.",
             ]
         )
-    paper_groups = _group_by_paper(shown)
-    if paper_groups:
-        lines.extend(["## Source-level evidence", ""])
-    for index, group in enumerate(paper_groups, start=1):
-        lines.extend(_render_paper_card(index, group, verbose=verbose))
+    if verbose:
+        paper_groups = _group_by_paper(shown)
+        if paper_groups:
+            lines.extend(["## Source-level evidence", ""])
+        for index, group in enumerate(paper_groups, start=1):
+            lines.extend(_render_paper_card(index, group, verbose=True))
     if not verbose and len(displayable) > len(shown):
         lines.extend(
             [
@@ -110,11 +92,7 @@ def _render_claim_synthesis(
 ) -> list[str]:
     study_count = int(synthesis.get("study_count", synthesis.get("paper_count", 0)))
     study_label = "distinct source paper" if study_count == 1 else "distinct source papers"
-    lines = [
-        heading,
-        "",
-        "**Verdict:** " + str(synthesis.get("verdict", synthesis.get("conclusion", ""))),
-        "",
+    lines = ([heading, ""] if heading else []) + [
         f"**Evidence base:** {study_count} {study_label}, "
         + f"{synthesis.get('passage_count', 0)} assessed passage(s). "
         + "Passages from one paper are not independent confirmations; "
@@ -147,7 +125,7 @@ def _render_claim_synthesis(
                 line += f": {question['reason']}"
             lines.append(line)
     if synthesis.get("revision_guidance"):
-        lines.extend(["", "**Revision guidance:** " + str(synthesis["revision_guidance"])])
+        lines.extend(["", "**Verdict:** " + str(synthesis["revision_guidance"])])
     quantitative = synthesis.get("quantitative_findings", [])
     if quantitative:
         lines.extend(["", "**Reported numeric source statements** (not pooled):"])
@@ -156,10 +134,55 @@ def _render_claim_synthesis(
             lines.append(
                 f"- {finding.get('title', 'Source')}{page}: “{finding['matched_quote']}”"
             )
-    lines.extend(
-        ["", "**Passage-level coverage:** " + str(synthesis.get("summary", "")), ""]
-    )
+    coverage = _passage_coverage_accounting(str(synthesis.get("summary", "")))
+    lines.extend(["", "**Passage-level coverage:** " + _colorize_passage_counts(coverage), ""])
     return lines
+
+
+def _passage_coverage_accounting(summary: str) -> str:
+    evidence = re.search(
+        r"Evidence from (\d+) distinct? papers? across (\d+) assessed passages?:\s*"
+        r"(.*?)(?:\. Stated scope|\. This is|$)",
+        summary,
+    )
+    if not evidence:
+        evidence = re.search(
+            r"Evidence from (\d+) papers? across (\d+) assessed passages?:\s*(.*?)(?:\.|$)",
+            summary,
+        )
+    if not evidence:
+        return summary
+    relation_counts = {
+        label: re.search(rf"(\d+) (?:paper\(s\) with |with )?{label}\b", evidence.group(3))
+        for label in ("supporting", "partial", "contradicting", "mixed", "unresolved")
+    }
+    counts = [
+        f"{match.group(1) if match else '0'} {label}"
+        for label, match in relation_counts.items()
+    ]
+    return (
+        f"{evidence.group(1)} papers · {evidence.group(2)} passages"
+        + (" · " + " · ".join(counts) if counts else "")
+    )
+
+
+def _colorize_passage_counts(summary: str) -> str:
+    """Mark relation counts for terminal color while preserving plain Markdown."""
+    styles = {
+        "supporting": "support",
+        "partial": "partial",
+        "contradicting": "contradict",
+        "mixed": "mixed",
+        "unresolved": "unresolved",
+    }
+    for label, marker in styles.items():
+        summary = re.sub(
+            rf"\b\d+ {label}\b",
+            lambda match, kind=marker: f"⟦{kind}⟧{match.group()}⟦/{kind}⟧",
+            summary,
+            count=1,
+        )
+    return summary
 
 
 def _group_by_paper(items: Iterable[dict]) -> list[list[dict]]:

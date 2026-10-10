@@ -8,10 +8,10 @@ from bibliograph.pipeline.retrieval import enrich_hits, retrieve_claims, search_
 from bibliograph.render import render_check, render_search
 
 
-def test_search_render_explains_empty_results_and_keeps_claim():
+def test_search_render_explains_empty_results_without_repeating_claim():
     rendered = render_search([], claim="Road quality improves market access.")
 
-    assert "> Claim: Road quality improves market access." in rendered
+    assert "> Claim:" not in rendered
     assert "No assessed supporting or contradicting evidence was found." in rendered
 
 
@@ -358,12 +358,22 @@ def test_search_report_hides_unassessed_passages_unless_verbose():
             ],
         },
     )
-    assert "Claim-level synthesis" in synthesis_report
-    assert "**Conclusion:**" in synthesis_report
-    assert "⟦support⟧1 paper(s) with supporting⟦/support⟧" in synthesis_report
-    assert "⟦contradict⟧0 with contradicting⟦/contradict⟧" in synthesis_report
-    assert "Source-level evidence" in synthesis_report
-    assert "#### Passage 1 · p. 4" in synthesis_report
+    assert "Claim-level synthesis" not in synthesis_report
+    assert "**Evidence base:**" in synthesis_report
+    assert "**Passage accounting:**" not in synthesis_report
+    assert "2 papers · 2 passages" in synthesis_report
+    assert "⟦support⟧1 supporting⟦/support⟧" in synthesis_report
+    assert "⟦contradict⟧1 contradicting⟦/contradict⟧" in synthesis_report
+    assert "descriptive" not in synthesis_report
+    assert "scope differs" not in synthesis_report
+    assert "Source-level evidence" not in synthesis_report
+    assert "#### Passage 1 · p. 4" not in synthesis_report
+
+    verbose_report = render_search([supported], verbose=True, synthesis={"sources": [{
+        "source_id": "P1", "title": "A study", "page": 4, "relation": "supports"
+    }]})
+    assert "Source-level evidence" in verbose_report
+    assert "#### Passage 1 · p. 4" in verbose_report
 
 
 def test_rendered_references_are_sorted_by_support_score():

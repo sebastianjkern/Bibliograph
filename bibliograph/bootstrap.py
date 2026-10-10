@@ -44,6 +44,7 @@ from .pipeline.llm_tasks import (
     heuristic_rerank,
     refine_queries,
     rerank,
+    rerank_with_systemone,
     select_evidence,
     template_rationale,
 )
@@ -350,11 +351,42 @@ def _llm_tools(
 
     tools: dict[str, Callable] = {}
     if "rerank" in stages:
-        tools["rerank"] = stage_tool(
-            "rerank", "reranking", lambda complete: lambda claim, hits, progress=None: rerank(
-                claim, hits, complete=complete, progress=progress
+        if llm_settings.get("rerank_strategy", "systemone") == "systemone":
+            def run_systemone_reranker(claim, hits, progress=None):
+                from adapters.providers.decisions import build_decider
+
+                decision_config = {"provider": "ollama"}
+                if llm_settings.get("systemone_model"):
+                    decision_config["model"] = llm_settings["systemone_model"]
+                decider = build_decider(decision_config)
+                return rerank_with_systemone(
+                    claim,
+                    hits,
+                    decider=decider,
+                    workers=llm_settings.get("systemone_workers", 4),
+                    progress=progress,
+                )
+
+            if mode == "required":
+                tools["rerank"] = run_systemone_reranker
+            else:
+                @wraps(run_systemone_reranker)
+                def optional_systemone_reranker(*args, **kwargs):
+                    try:
+                        return run_systemone_reranker(*args, **kwargs)
+                    except Exception as error:
+                        logger.warning(
+                            "Ollama reranking unavailable; using retrieval order: %s", error
+                        )
+                        return heuristic_rerank(args[0], args[1])
+
+                tools["rerank"] = optional_systemone_reranker
+        else:
+            tools["rerank"] = stage_tool(
+                "rerank", "reranking", lambda complete: lambda claim, hits, progress=None: rerank(
+                    claim, hits, complete=complete, progress=progress
+                )
             )
-        )
     if "expand" in stages:
         tools["expand"] = stage_tool(
             "expand", "query expansion", lambda complete: lambda claim, progress=None: expand_query(

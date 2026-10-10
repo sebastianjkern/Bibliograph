@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from inspect import signature
 
 from ..domain import ScoredChunk, citation_label
@@ -35,6 +36,26 @@ _EXPANSION_PROMPTS = (
     ("reasoning", ("assumption", "alternative")),
     ("terminology", ("domain", "expert", "statistical")),
 )
+
+_EXPANSION_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["items"],
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["type", "text"],
+                "properties": {
+                    "type": {"type": "string"},
+                    "text": {"type": "string"},
+                },
+            },
+        }
+    },
+}
 
 _RERANK_SCHEMA: dict[str, object] = {
     "type": "object",
@@ -263,9 +284,10 @@ async def _expand_prompts(
 ) -> list[tuple[str, Sequence[str]]]:
     async def run_prompt(index: int, perspective: str, types: Sequence[str]):
         content = await asyncio.to_thread(
+            _complete_json,
             complete,
             _expansion_messages(claim, perspective, types),
-            json_mode=True,
+            _EXPANSION_SCHEMA,
         )
         return index, content, types
 
@@ -313,6 +335,56 @@ def rerank(
             complete=complete,
             progress=progress,
         )
+    )
+
+
+def rerank_with_systemone(
+    claim: str,
+    hits: Sequence[ScoredChunk],
+    *,
+    decider,
+    workers: int = 4,
+    progress: ProgressUpdate | None = None,
+) -> list[ScoredChunk]:
+    """Score passages concurrently with Ikarus's typed System One decision API."""
+    if not hits:
+        return []
+    if workers < 1:
+        raise ValueError("workers must be positive")
+    question = (
+        "Does this passage contain explicit evidence that directly bears on the claim, "
+        "either supporting or contradicting it, at the claim's stated population, unit, "
+        "outcome, geographic, and time scope? Give a high score only for a specific finding "
+        "or result relevant to that relationship. Give a low score for topical overlap, "
+        "background, methods without results, or support that requires an unstated inference."
+    )
+
+    def score(hit: ScoredChunk) -> ScoredChunk:
+        chunk, _retrieval_score = hit
+        state = (
+            f"CLAIM:\n{claim}\n\nPASSAGE:\n{chunk.text}\n\n"
+            f"SECTION: {chunk.section or 'unknown'}\n"
+            f"CONTENT KIND: {chunk.content_kind}\n"
+            f"EVIDENCE ROLE: {chunk.evidence_role or 'unknown'}"
+        )
+        value = float(decider.noul(state, question))
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"System One returned a score outside [0, 1]: {value}")
+        return chunk, value
+
+    scored: list[ScoredChunk | None] = [None] * len(hits)
+    with ThreadPoolExecutor(max_workers=min(workers, len(hits))) as executor:
+        futures = {
+            executor.submit(score, hit): index for index, hit in enumerate(hits)
+        }
+        for completed_count, future in enumerate(as_completed(futures), start=1):
+            scored[futures[future]] = future.result()
+            if progress is not None:
+                progress(f"Reranking passages · {completed_count}/{len(hits)}")
+    return sorted(
+        (hit for hit in scored if hit is not None),
+        key=lambda hit: hit[1],
+        reverse=True,
     )
 
 
