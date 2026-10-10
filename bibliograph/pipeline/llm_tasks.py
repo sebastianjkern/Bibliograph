@@ -6,6 +6,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from inspect import signature
+from typing import cast
 
 from ..domain import ScoredChunk, citation_label
 from ..text_matching import contains_text
@@ -359,33 +360,93 @@ def rerank_with_systemone(
         "background, methods without results, or support that requires an unstated inference."
     )
 
-    def score(hit: ScoredChunk) -> ScoredChunk:
-        chunk, _retrieval_score = hit
-        state = (
-            f"CLAIM:\n{claim}\n\nPASSAGE:\n{chunk.text}\n\n"
-            f"SECTION: {chunk.section or 'unknown'}\n"
-            f"CONTENT KIND: {chunk.content_kind}\n"
-            f"EVIDENCE ROLE: {chunk.evidence_role or 'unknown'}"
-        )
-        value = float(decider.noul(state, question))
-        if not 0.0 <= value <= 1.0:
-            raise ValueError(f"System One returned a score outside [0, 1]: {value}")
-        return chunk, value
-
+    batch_decide = cast(
+        Callable[[object, Mapping[str, str]], Mapping[str, float]] | None,
+        getattr(decider, "noul_many", None),
+    )
     scored: list[ScoredChunk | None] = [None] * len(hits)
-    with ThreadPoolExecutor(max_workers=min(workers, len(hits))) as executor:
-        futures = {
-            executor.submit(score, hit): index for index, hit in enumerate(hits)
-        }
-        for completed_count, future in enumerate(as_completed(futures), start=1):
-            scored[futures[future]] = future.result()
+    if callable(batch_decide):
+        start = 0
+        batch: list[ScoredChunk] = []
+        batch_chars = 0
+        for hit in hits:
+            text_length = len(hit[0].text)
+            if batch and (len(batch) >= 32 or batch_chars + text_length > 12_000):
+                _score_systemone_batch(
+                    claim, question, batch, start, batch_decide, scored
+                )
+                start += len(batch)
+                batch = []
+                batch_chars = 0
+                if progress is not None:
+                    progress(f"Reranking passages · {start}/{len(hits)}")
+            batch.append(hit)
+            batch_chars += text_length
+        if batch:
+            _score_systemone_batch(claim, question, batch, start, batch_decide, scored)
             if progress is not None:
-                progress(f"Reranking passages · {completed_count}/{len(hits)}")
+                progress(f"Reranking passages · {len(hits)}/{len(hits)}")
+    else:
+        def score(hit: ScoredChunk) -> ScoredChunk:
+            chunk, _retrieval_score = hit
+            state = (
+                f"CLAIM:\n{claim}\n\nPASSAGE:\n{chunk.text}\n\n"
+                f"SECTION: {chunk.section or 'unknown'}\n"
+                f"CONTENT KIND: {chunk.content_kind}\n"
+                f"EVIDENCE ROLE: {chunk.evidence_role or 'unknown'}"
+            )
+            value = float(decider.noul(state, question))
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"System One returned a score outside [0, 1]: {value}")
+            return chunk, value
+
+        with ThreadPoolExecutor(max_workers=min(workers, len(hits))) as executor:
+            futures = {
+                executor.submit(score, hit): index for index, hit in enumerate(hits)
+            }
+            for completed_count, future in enumerate(as_completed(futures), start=1):
+                scored[futures[future]] = future.result()
+                if progress is not None:
+                    progress(f"Reranking passages · {completed_count}/{len(hits)}")
     return sorted(
         (hit for hit in scored if hit is not None),
         key=lambda hit: hit[1],
         reverse=True,
     )
+
+
+def _score_systemone_batch(
+    claim: str,
+    question: str,
+    hits: Sequence[ScoredChunk],
+    start: int,
+    batch_decide: Callable[[object, Mapping[str, str]], Mapping[str, float]],
+    scored: list[ScoredChunk | None],
+) -> None:
+    passages = []
+    questions = {}
+    for offset, (chunk, _retrieval_score) in enumerate(hits):
+        name = f"passage_{offset}"
+        passages.append(
+            {
+                "id": name,
+                "text": chunk.text,
+                "section": chunk.section or "unknown",
+                "content_kind": chunk.content_kind,
+                "evidence_role": chunk.evidence_role or "unknown",
+            }
+        )
+        questions[name] = (
+            f"{question} Assess only passage {name}; ignore every other passage."
+        )
+    values = batch_decide({"claim": claim, "passages": passages}, questions)
+    for offset, (name, (chunk, _retrieval_score)) in enumerate(
+        zip(questions, hits, strict=True)
+    ):
+        value = float(values[name])
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"System One returned a score outside [0, 1]: {value}")
+        scored[start + offset] = (chunk, value)
 
 
 async def _rerank_batches(

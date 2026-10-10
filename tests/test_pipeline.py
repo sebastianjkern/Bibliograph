@@ -15,6 +15,37 @@ def test_search_render_explains_empty_results_without_repeating_claim():
     assert "No assessed supporting or contradicting evidence was found." in rendered
 
 
+def test_systemone_reranks_passages_in_one_named_question_batch():
+    from bibliograph.pipeline.llm_tasks import rerank_with_systemone
+
+    paper = Paper("P1", "Road study")
+    first = Chunk("P1:1:0", paper, "Roads increased trade.")
+    second = Chunk("P1:2:0", paper, "This is background on roads.")
+    calls = []
+
+    class BatchDecider:
+        def noul_many(self, state, questions):
+            calls.append((state, questions))
+            return {name: (0.9 if name == "passage_0" else 0.1) for name in questions}
+
+        def noul(self, *_args):
+            raise AssertionError("batch-capable decider should use one batch request")
+
+    reranked = rerank_with_systemone(
+        "Roads improve trade.",
+        [(first, 0.5), (second, 0.4)],
+        decider=BatchDecider(),
+    )
+
+    assert len(calls) == 1
+    state, questions = calls[0]
+    assert state["claim"] == "Roads improve trade."
+    assert len(state["passages"]) == len(questions) == 2
+    assert state["passages"][0]["text"] == first.text
+    assert state["passages"][1]["text"] == second.text
+    assert reranked == [(first, 0.9), (second, 0.1)]
+
+
 def test_render_prettifies_local_pdf_filename_titles():
     paper = Paper("LOCAL-1", "spatial_spillover_of_conflict")
     chunk = Chunk("LOCAL-1:1:0", paper, "Conflict along roads raises maize prices.")
