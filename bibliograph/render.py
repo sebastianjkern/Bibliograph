@@ -112,9 +112,11 @@ def _render_claim_synthesis(
                 if not isinstance(evidence, dict) or not evidence.get("quote"):
                     continue
                 page = f", p. {evidence['page']}" if evidence.get("page") else ""
-                lines.append(
-                    f"  - Source evidence ({evidence.get('title', 'Source')}{page}): "
-                    f"“{evidence['quote']}”"
+                lines.extend(
+                    [
+                        f"  - “{evidence['quote']}”",
+                        f"    — {evidence.get('title', 'Source')}{page}",
+                    ]
                 )
     questions = synthesis.get("unresolved_questions", [])
     if questions:

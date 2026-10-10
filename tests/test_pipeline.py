@@ -407,6 +407,28 @@ def test_search_report_hides_unassessed_passages_unless_verbose():
     assert "#### Passage 1 · p. 4" in verbose_report
 
 
+def test_claim_coverage_prints_excerpt_before_its_source_attribution():
+    report = render_search(
+        [],
+        claim="A claim",
+        synthesis={
+            "sources": [{"source_id": "P1", "title": "A long source title", "page": 9}],
+            "claim_coverage": [
+                {
+                    "name": "Component",
+                    "status": "partial",
+                    "evidence": [
+                        {"title": "A long source title", "page": 9, "quote": "A short excerpt."}
+                    ],
+                }
+            ],
+        },
+    )
+
+    assert "  - “A short excerpt.”\n    — A long source title, p. 9" in report
+    assert "Source evidence (" not in report
+
+
 def test_rendered_references_are_sorted_by_support_score():
     paper = Paper("P1", "Road study", ("Ada",), "2024", "10/example")
     chunk_high = Chunk("P1:1:0", paper, "Road quality improves market access.", page=1)
