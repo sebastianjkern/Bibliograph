@@ -545,7 +545,9 @@ def _emit(markdown: str, output: Path | None) -> None:
 
 
 def _emit_marked_markdown(markdown, marker_pattern, styles, console) -> None:
-    quote_line_pattern = re.compile(r"^\s*- (?P<quote>.*)$")
+    quote_line_pattern = re.compile(
+        r"^\s*- (?P<quote>(?:⟦(?:support|partial|contradict|mixed|unresolved)⟧)?“.*)$"
+    )
     attribution_pattern = re.compile(r"^ {4}— \*(?P<title>.*?)\*(?P<details>.*)$")
     chunks = markdown.splitlines(keepends=True)
     markdown_chunk = []
@@ -557,7 +559,7 @@ def _emit_marked_markdown(markdown, marker_pattern, styles, console) -> None:
                 if markdown_chunk:
                     console.print(Markdown("".join(markdown_chunk)), end="")
                     markdown_chunk.clear()
-                rendered = Text("      — ")
+                rendered = Text()
                 rendered.append(attribution.group("title"), style="italic")
                 details = attribution.group("details")
                 citation = re.search(r"\*\*(.*?)\*\*", details)
@@ -567,10 +569,10 @@ def _emit_marked_markdown(markdown, marker_pattern, styles, console) -> None:
                     rendered.append(details[citation.end() :])
                 else:
                     rendered.append(details)
-                console.print(rendered)
-            else:
-                markdown_chunk.append(chunk)
-            continue
+                _print_inset_text(
+                    console, rendered, prefix="      — ", continuation="        "
+                )
+                continue
         quote_line = quote_line_pattern.match(line)
         if quote_line is None:
             markdown_chunk.append(chunk)
@@ -579,13 +581,23 @@ def _emit_marked_markdown(markdown, marker_pattern, styles, console) -> None:
             console.print(Markdown("".join(markdown_chunk)), end="")
             markdown_chunk.clear()
         quote = quote_line.group("quote")
-        rendered = Text("    • ")
+        rendered = Text()
         position = 0
         for match in marker_pattern.finditer(quote):
             rendered.append(quote[position : match.start()])
             rendered.append(match.group("text"), style=styles[match.group("kind")])
             position = match.end()
         rendered.append(quote[position:])
-        console.print(rendered)
+        _print_inset_text(console, rendered, prefix="    • ", continuation="      ")
     if markdown_chunk:
         console.print(Markdown("".join(markdown_chunk)), end="")
+
+
+def _print_inset_text(console, text: Text, *, prefix: str, continuation: str) -> None:
+    """Wrap a styled line while keeping continuation lines under its content."""
+    available = max(1, console.width - len(continuation))
+    wrapped = text.wrap(console, available, overflow="fold") or [Text()]
+    for index, line in enumerate(wrapped):
+        output = Text(prefix if index == 0 else continuation)
+        output.append_text(line)
+        console.print(output)

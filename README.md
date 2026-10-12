@@ -8,6 +8,9 @@ Bibliograph finds evidence for claims in a local paper library and helps verify 
 
 ![Bibliograph example](./image.png)
 
+![Bibliograph example](./output.png)
+
+
 ## Install
 
 Bibliograph requires Python 3.12 or newer and uses [uv](https://docs.astral.sh/uv/).
