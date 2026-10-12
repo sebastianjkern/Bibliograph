@@ -120,6 +120,8 @@ def build_evidence_workflow(
         variant_count = len(queries)
         label = "variant" if variant_count == 1 else "variants"
         report(f"Prepared claim · {variant_count} query {label} ready")
+        for query in queries[1:]:
+            report(f'"{query}"')
         return {
             "pending_queries": queries,
             "queries": queries,

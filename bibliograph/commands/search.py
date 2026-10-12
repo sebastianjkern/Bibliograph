@@ -45,9 +45,9 @@ def search(
                 progress.console.print(f"[bold cyan]{description}[/bold cyan]")
             elif description.startswith("Review assessments ·"):
                 progress.console.print(f"[cyan]  {description}[/cyan]")
-            elif description.startswith("Follow-up query "):
+            elif description.startswith(('"', "Follow-up query ")):
                 line = Text("  ↳ ", style="cyan")
-                line.append(description.removeprefix("Follow-up query "), style="dim")
+                line.append(description, style="dim")
                 progress.console.print(line)
             elif description.startswith((
                 "Retrieved initial evidence",
