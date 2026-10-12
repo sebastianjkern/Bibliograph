@@ -91,7 +91,7 @@ def _render_claim_synthesis(
             status_label = status.title()
             if status.casefold() == "contradicted":
                 status_label = f"⟦contradict⟧{status_label}⟦/contradict⟧"
-            reason = str(component.get("reason", "")).strip()
+            reason = _compact_reason(str(component.get("reason", "")))
             line = f"- {status_label} — **{component.get('name', 'Claim component')}**"
             if reason:
                 line += f": {reason}"
@@ -101,18 +101,10 @@ def _render_claim_synthesis(
                     continue
                 lines.extend(
                     [
-                        f"  - “{evidence['quote']}”",
+                        f"  - {_colorize_evidence_quote(evidence, status, quoted=True)}",
                         f"    — {_source_attribution(evidence)}",
                     ]
                 )
-    questions = synthesis.get("unresolved_questions", [])
-    if questions:
-        lines.extend(["", "**Unresolved questions:**"])
-        for question in questions:
-            line = f"- {question.get('component', 'Claim component')}"
-            if question.get("reason"):
-                line += f": {question['reason']}"
-            lines.append(line)
     if synthesis.get("revision_guidance"):
         lines.extend(["", "**Verdict:** " + str(synthesis["revision_guidance"])])
     coverage = _passage_coverage_accounting(str(synthesis.get("summary", "")))
@@ -127,6 +119,34 @@ def _paper_identity(evidence: dict) -> str:
     citation_key = str(evidence.get("citation_key") or "").strip().casefold()
     title = str(evidence.get("title") or "").strip().casefold()
     return citation_key or title
+
+
+def _compact_reason(reason: str, limit: int = 220) -> str:
+    """Keep the first distinct explanation and cap its terminal width."""
+    reason = reason.split(";", 1)[0].strip()
+    if len(reason) <= limit:
+        return reason
+    shortened = reason[: limit - 1].rsplit(" ", 1)[0].rstrip(" ,;:")
+    return shortened + "…"
+
+
+def _colorize_evidence_quote(
+    evidence: dict, component_status: str, *, quoted: bool = False
+) -> str:
+    """Emphasize only quoted evidence with an assessed claim relation."""
+    status = str(evidence.get("status") or component_status).casefold()
+    marker = {
+        "established": "support",
+        "supports": "support",
+        "contradicted": "contradict",
+        "contradicts": "contradict",
+        "partial": "partial",
+        "mixed": "mixed",
+    }.get(status)
+    quote = str(evidence["quote"]).strip()
+    if quoted:
+        quote = f"“{quote}”"
+    return f"⟦{marker}⟧{quote}⟦/{marker}⟧" if marker else quote
 
 
 def _passage_coverage_accounting(summary: str) -> str:
@@ -169,7 +189,7 @@ def _colorize_passage_counts(summary: str) -> str:
     }
     for label, marker in styles.items():
         summary = re.sub(
-            rf"\b\d+ {label}\b",
+            rf"\b[1-9]\d* {label}\b",
             lambda match, kind=marker: f"⟦{kind}⟧{match.group()}⟦/{kind}⟧",
             summary,
             count=1,

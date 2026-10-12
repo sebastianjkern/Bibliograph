@@ -549,10 +549,11 @@ def build_evidence_workflow(
                 "planning_reason": planning_reason,
             }
         )
-        report(
-            f"Generated {len(pending)} follow-up queries · "
-            f"{planning_reason} · round {state['refinement_round'] + 1}"
-        )
+        if pending:
+            report(
+                f"Generated {len(pending)} follow-up queries · "
+                f"round {state['refinement_round'] + 1}"
+            )
         for index, query in enumerate(pending, start=1):
             report(f"Follow-up query {index}/{len(pending)} · {query}")
         return {
@@ -902,13 +903,20 @@ def _aggregate_claim_components(items: Sequence[dict]) -> list[dict[str, object]
             status = str(component.get("status", "unresolved"))
             entry["sources"].add(source_id)
             reason = " ".join(str(component.get("reason", "")).split())
+            evidence_quote = " ".join(
+                str(component.get("evidence_quote", "")).split()
+            )
+            if not evidence_quote:
+                evidence_quote = " ".join(
+                    str(item.get("matched_excerpt") or item["chunk"].text).split()
+                )
+                if len(evidence_quote) > 280:
+                    evidence_quote = evidence_quote[:277].rsplit(" ", 1)[0] + "…"
             entry["assessments"].append(
                 {
                     "status": status,
                     "reason": reason,
-                    "evidence_quote": " ".join(
-                        str(component.get("evidence_quote", "")).split()
-                    ),
+                    "evidence_quote": evidence_quote,
                     "source_title": item["chunk"].paper.title,
                     "zotero_key": source_id,
                     "citation_key": item["chunk"].paper.citation_key,
@@ -951,12 +959,14 @@ def _aggregate_claim_components(items: Sequence[dict]) -> list[dict[str, object]
                     assessment["zotero_key"],
                     assessment["page"],
                     assessment["citation_key"],
+                    assessment["status"],
                     assessment["evidence_quote"],
                 ): {
                     "title": assessment["source_title"],
                     "zotero_key": assessment["zotero_key"],
                     "citation_key": assessment["citation_key"],
                     "page": assessment["page"],
+                    "status": assessment["status"],
                     "quote": assessment["evidence_quote"],
                 }
                 for assessment in assessments

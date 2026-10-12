@@ -516,10 +516,10 @@ def _emit(markdown: str, output: Path | None) -> None:
     styles = {
         "highlight": "bold black on yellow",
         "support": "bold green",
-        "partial": "bold magenta",
+        "partial": "bold yellow",
         "contradict": "bold red",
         "mixed": "bold yellow",
-        "unresolved": "bold cyan",
+        "unresolved": "dim",
     }
     console = Console()
     coverage_heading = "**Assessment coverage:** "
@@ -545,13 +545,47 @@ def _emit(markdown: str, output: Path | None) -> None:
 
 
 def _emit_marked_markdown(markdown, marker_pattern, styles, console) -> None:
-    position = 0
-    for match in marker_pattern.finditer(markdown):
-        if match.start() > position:
-            console.print(Markdown(markdown[position : match.start()]), end="")
-        console.print(Text(match.group("text"), style=styles[match.group("kind")]), end="")
-        if markdown[match.end() :].startswith(" "):
-            console.print(" ", end="")
-        position = match.end()
-    if position < len(markdown):
-        console.print(Markdown(markdown[position:]), end="")
+    quote_line_pattern = re.compile(r"^\s*- (?P<quote>.*)$")
+    attribution_pattern = re.compile(r"^ {4}— \*(?P<title>.*?)\*(?P<details>.*)$")
+    chunks = markdown.splitlines(keepends=True)
+    markdown_chunk = []
+    for chunk in chunks:
+        line = chunk.rstrip("\r\n")
+        if "⟦" not in line:
+            attribution = attribution_pattern.match(line)
+            if attribution:
+                if markdown_chunk:
+                    console.print(Markdown("".join(markdown_chunk)), end="")
+                    markdown_chunk.clear()
+                rendered = Text("      — ")
+                rendered.append(attribution.group("title"), style="italic")
+                details = attribution.group("details")
+                citation = re.search(r"\*\*(.*?)\*\*", details)
+                if citation:
+                    rendered.append(details[: citation.start()])
+                    rendered.append(citation.group(1), style="bold")
+                    rendered.append(details[citation.end() :])
+                else:
+                    rendered.append(details)
+                console.print(rendered)
+            else:
+                markdown_chunk.append(chunk)
+            continue
+        quote_line = quote_line_pattern.match(line)
+        if quote_line is None:
+            markdown_chunk.append(chunk)
+            continue
+        if markdown_chunk:
+            console.print(Markdown("".join(markdown_chunk)), end="")
+            markdown_chunk.clear()
+        quote = quote_line.group("quote")
+        rendered = Text("    • ")
+        position = 0
+        for match in marker_pattern.finditer(quote):
+            rendered.append(quote[position : match.start()])
+            rendered.append(match.group("text"), style=styles[match.group("kind")])
+            position = match.end()
+        rendered.append(quote[position:])
+        console.print(rendered)
+    if markdown_chunk:
+        console.print(Markdown("".join(markdown_chunk)), end="")

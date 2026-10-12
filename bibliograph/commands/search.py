@@ -31,7 +31,8 @@ def search(
         task_id = progress.add_task("Preparing search") if progress is not None else None
         def print_step(message: str | Text) -> None:
             if progress is not None:
-                line = Text("✓ ", style="green")
+                line = Text()
+                line.append("✓ ", style="green")
                 if isinstance(message, Text):
                     line.append_text(message)
                 else:
@@ -42,12 +43,22 @@ def search(
             if progress is None or task_id is None:
                 return
             if description.startswith("Phase "):
-                progress.console.print(f"[bold cyan]{description}[/bold cyan]")
+                gap_prefix = " · Check evidence gaps · "
+                if gap_prefix in description:
+                    heading, details = description.split(gap_prefix, 1)
+                    line = Text()
+                    line.append(heading + " · Check evidence gaps", style="bold cyan")
+                    line.append(" · ", style="dim")
+                    line.append(details)
+                    progress.console.print(line)
+                else:
+                    progress.console.print(Text(description, style="bold cyan"))
             elif description.startswith("Review assessments ·"):
-                progress.console.print(f"[cyan]  {description}[/cyan]")
+                progress.console.print(Text(f"  {description}"))
             elif description.startswith(('"', "Follow-up query ")):
-                line = Text("  ↳ ", style="cyan")
-                line.append(description, style="dim")
+                line = Text()
+                line.append("  ↳ ", style="dim")
+                line.append(description)
                 progress.console.print(line)
             elif description.startswith((
                 "Retrieved initial evidence",
@@ -88,15 +99,20 @@ def search(
                 description="Search complete",
                 refresh=True,
             )
-            progress.console.print(
-                f"[bold green]Complete[/bold green] · "
-                f"{result['timings'].get('total', {}).get('seconds', 0.0):.2f}s · "
-                f"{result.get('refinement_rounds', 0)} additional search round(s)"
+            rounds = int(result.get("refinement_rounds", 0))
+            round_label = "round" if rounds == 1 else "rounds"
+            complete_line = Text()
+            complete_line.append("Complete", style="bold green")
+            complete_line.append(
+                f" · {result['timings'].get('total', {}).get('seconds', 0.0):.2f}s"
+                f" · {rounds} additional search {round_label}"
             )
+            progress.console.print(complete_line, highlight=False)
             timings = result.get("timings", {})
             if timings:
                 progress.console.print(
-                    format_workflow_timings(timings, verbose=verbose)
+                    format_workflow_timings(timings, verbose=verbose),
+                    highlight=False,
                 )
     return {
         "result": result,
@@ -112,20 +128,21 @@ def search(
 
 def _style_relation_counts(message: str) -> Text:
     styles = {
-        "supporting": "bold green",
-        "partial": "bold magenta",
-        "contradicting": "bold red",
-        "mixed": "bold yellow",
-        "unresolved": "bold cyan",
+        "supporting": "green",
+        "partial": "yellow",
+        "contradicting": "red",
+        "mixed": "yellow",
+        "unresolved": "dim",
     }
-    pattern = re.compile(r"\b\d+ (supporting|partial|contradicting|mixed|unresolved)\b")
+    pattern = re.compile(r"\b(\d+) (supporting|partial|contradicting|mixed|unresolved)\b")
     line = Text()
     position = 0
     for match in pattern.finditer(message):
-        line.append(message[position : match.start()], style="dim")
-        line.append(match.group(), style=styles[match.group(1)])
+        line.append(message[position : match.start()])
+        style = styles[match.group(2)] if int(match.group(1)) else "dim"
+        line.append(match.group(), style=style)
         position = match.end()
-    line.append(message[position:], style="dim")
+    line.append(message[position:])
     return line
 
 
