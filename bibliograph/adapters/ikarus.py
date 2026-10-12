@@ -163,6 +163,7 @@ class IkarusBackend:
         if mode not in {"read", "write"}:
             raise ValueError("mode must be 'read' or 'write'")
         self.path = Path(path)
+        self._assessment_cache = None
         self.mode = mode
         self.embedding = embedding
         self.ingestion_strategy = ingestion_strategy
@@ -253,6 +254,25 @@ class IkarusBackend:
         if sqlite_vec._connection is not None:
             sqlite_vec._connection.close()
             sqlite_vec._connection = None
+
+    def workflow_cache(self):
+        """Return persistent workflow caches beside this index, created on first use."""
+        if self._assessment_cache is None:
+            from ..pipeline.assessment_cache import SQLiteAssessmentCache
+
+            if str(self.path) == ":memory:":
+                return None
+            cache_path = self.path.with_name(self.path.name + ".assessment-cache.sqlite3")
+            try:
+                self._assessment_cache = SQLiteAssessmentCache(cache_path)
+            except (OSError, sqlite3.Error) as error:
+                # Caching is an optimization; read-only or restricted deployments
+                # should continue to work without it.
+                from ..pipeline.assessment_cache import logger
+
+                logger.warning("Evidence assessment cache unavailable: %s", error)
+                return None
+        return self._assessment_cache
 
     def index_document(
         self,
@@ -385,6 +405,11 @@ class IkarusBackend:
             limit=limit,
         )
         return list(result.hits), dict(result.score_details)
+
+    def embed_queries(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed search queries together through the configured batch provider."""
+        self._require_open()
+        return self.embedding["embed_queries"](texts)
 
     def retrieve_request(
         self,
@@ -718,6 +743,7 @@ def _paper_metadata(paper: Paper, source_key: str, path: str | Path) -> dict[str
         "authors": list(paper.authors),
         "year": paper.year,
         "doi": paper.doi,
+        "citation_key": paper.citation_key,
         "collections": list(paper.collections),
         "source_key": source_key,
         "path": str(Path(path)),
@@ -797,6 +823,7 @@ def _paper_from_metadata(metadata, fallback: str) -> Paper:
         _optional_str(metadata.get("year")),
         _optional_str(metadata.get("doi")),
         tuple(str(value) for value in metadata.get("collections", ()) or ()),
+        _optional_str(metadata.get("citation_key")),
     )
 
 

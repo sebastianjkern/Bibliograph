@@ -8,7 +8,6 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
-from rich.console import Console
 from rich.progress import (
     BarColumn,
     Progress,
@@ -18,6 +17,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from ..logging_utils import stderr_console
 from ..pipeline.drafts import parse_draft_file
 from ..pipeline.retrieval import DEFAULT_SEARCH_LIMIT, search_claim
 from ..pipeline.timing import format_workflow_timings
@@ -219,6 +219,6 @@ def _progress_context(show_progress: bool):
         TaskProgressColumn(),
         TimeElapsedColumn(),
         TextColumn("[bold cyan]{task.description}"),
-        console=Console(stderr=True),
+        console=stderr_console(),
         transient=False,
     )

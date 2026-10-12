@@ -1,5 +1,6 @@
 import logging
 
+from rich.console import Console
 from rich.logging import RichHandler
 
 LOGGER_NAME = "bibliograph"
@@ -13,12 +14,21 @@ def configure_logging(level: str = "INFO", quiet: bool = False) -> None:
     if quiet:
         return
     handler = RichHandler(
+        console=Console(stderr=True),
         show_path=False,
         show_time=False,
         rich_tracebacks=True,
         markup=False,
     )
     logger.addHandler(handler)
+
+
+def stderr_console() -> Console:
+    """Return the configured logging console so live progress can share it."""
+    for handler in logging.getLogger(LOGGER_NAME).handlers:
+        if isinstance(handler, RichHandler):
+            return handler.console
+    return Console(stderr=True)
 
 
 def get_logger(component: str) -> logging.Logger:

@@ -9,7 +9,7 @@ from typing import Any, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
 
-from ..domain import Claim, ScoredChunk
+from ..domain import Claim, ScoredChunk, citation_label
 from ..knowledge import QueryRequest
 from ..text_matching import contains_text
 from .retrieval import (
@@ -26,6 +26,7 @@ from .retrieval import (
     enrich_hits,
     initial_retrieval_limit,
 )
+from .assessment_cache import assessment_cache_key
 from .timing import TimingRecorder
 
 RefineQueries = Callable[[str, Sequence[str]], list[str]]
@@ -102,6 +103,19 @@ def build_evidence_workflow(
 
     context_lookup = _context_lookup(backend)
     retrieve_request = getattr(backend, "retrieve_request", None)
+    workflow_cache_factory = getattr(backend, "workflow_cache", None)
+    cache_is_configured = any(
+        getattr(tool, identity, None)
+        for tool, identity in (
+            (rerank, "rerank_cache_identity"),
+            (select_evidence, "assessment_cache_identity"),
+        )
+    )
+    workflow_cache = (
+        workflow_cache_factory()
+        if callable(workflow_cache_factory) and cache_is_configured
+        else None
+    )
     assessment_pass = 0
 
     def report(message: str) -> None:
@@ -147,6 +161,23 @@ def build_evidence_workflow(
         pending = state["pending_queries"]
         existing_ids = set(candidates)
         retrieval_kind = "initial" if state["refinement_round"] == 0 else "follow-up"
+        query_vectors: dict[str, Sequence[float]] = {}
+        batch_embed_queries = getattr(backend, "embed_queries", None)
+        if (
+            pending
+            and callable(retrieve_request)
+            and callable(batch_embed_queries)
+            and _accepts_keyword(retrieve_request, "query_vector")
+        ):
+            report(f"Embedding {len(pending)} search queries in one batch")
+            if timings is None:
+                vectors = batch_embed_queries(pending)
+            else:
+                with timings.measure("embedding"):
+                    vectors = batch_embed_queries(pending)
+            if len(vectors) != len(pending):
+                raise ValueError("Query embedder returned a different number of vectors")
+            query_vectors = dict(zip(pending, vectors, strict=True))
         report(
             "Phase 2/5 · Retrieve initial evidence"
             if retrieval_kind == "initial"
@@ -161,6 +192,8 @@ def build_evidence_workflow(
                 }
                 if timings is not None and _accepts_keyword(retrieve_request, "timings"):
                     retrieve_kwargs["timings"] = timings
+                if query in query_vectors:
+                    retrieve_kwargs["query_vector"] = query_vectors[query]
                 engine_result = retrieve_request(
                     QueryRequest.from_alternatives(query), **retrieve_kwargs
                 )
@@ -216,18 +249,72 @@ def build_evidence_workflow(
         nonlocal assessment_pass
         assessment_pass += 1
         candidates = list(state["candidates"].values())
-        if timings is None:
-            ranked = (
-                _run_reranker(rerank, state["claim"]["text"], candidates, progress)
-                if rerank is not None
-                else sorted(candidates, key=lambda hit: hit[1], reverse=True)
+        rerank_identity = getattr(rerank, "rerank_cache_identity", None)
+        rerank_key = None
+        candidate_by_id = {hit[0].chunk_id: hit for hit in candidates}
+        if workflow_cache is not None and rerank_identity and rerank is not None:
+            rerank_key = assessment_cache_key(
+                {
+                    "identity": rerank_identity,
+                    "claim": state["claim"]["text"],
+                    "candidates": [
+                        {
+                            "chunk_id": chunk.chunk_id,
+                            "text": chunk.text,
+                            "retrieval_score": float(score),
+                            "citation": citation_label(chunk.paper),
+                            "page": chunk.page,
+                            "section": chunk.section,
+                            "content_kind": chunk.content_kind,
+                            "evidence_role": chunk.evidence_role,
+                        }
+                        for chunk, score in candidates
+                    ],
+                }
             )
+        cached_ranking = (
+            workflow_cache.get_reranking(rerank_key) if rerank_key is not None else None
+        )
+        ranked = None
+        if cached_ranking is not None:
+            try:
+                if len(cached_ranking) == len(candidate_by_id) and {
+                    str(row["chunk_id"]) for row in cached_ranking
+                } == set(candidate_by_id):
+                    ranked = [
+                        (candidate_by_id[str(row["chunk_id"])][0], float(row["score"]))
+                        for row in cached_ranking
+                    ]
+            except (KeyError, TypeError, ValueError):
+                ranked = None
+        if ranked is not None:
+            report(f"Reranking · reused cached order for {len(ranked)} passages")
         else:
-            with timings.measure("reranking"):
+            if timings is None:
                 ranked = (
                     _run_reranker(rerank, state["claim"]["text"], candidates, progress)
                     if rerank is not None
                     else sorted(candidates, key=lambda hit: hit[1], reverse=True)
+                )
+            else:
+                with timings.measure("reranking"):
+                    ranked = (
+                        _run_reranker(rerank, state["claim"]["text"], candidates, progress)
+                        if rerank is not None
+                        else sorted(candidates, key=lambda hit: hit[1], reverse=True)
+                    )
+            if (
+                rerank_key is not None
+                and getattr(ranked, "cacheable", True) is not False
+                and len(ranked) == len(candidate_by_id)
+                and {hit[0].chunk_id for hit in ranked} == set(candidate_by_id)
+            ):
+                workflow_cache.set_reranking(
+                    rerank_key,
+                    [
+                        {"chunk_id": hit[0].chunk_id, "score": float(hit[1])}
+                        for hit in ranked
+                    ],
                 )
         assessment_results = dict(state.get("assessment_results", {}))
         contexts = dict(state.get("contexts", {}))
@@ -245,6 +332,8 @@ def build_evidence_workflow(
                 report(f"Phase 3/5 · Assess evidence · {len(finalists)} passages")
             else:
                 report(f"Review assessments · {len(finalists)} passages")
+
+            prepared: list[tuple[int, ScoredChunk, str]] = []
             for index, hit in enumerate(finalists, start=1):
                 chunk, _score = hit
                 if chunk.chunk_id not in contexts:
@@ -253,14 +342,44 @@ def build_evidence_workflow(
                         context if isinstance(context, str) and context.strip() else chunk.text
                     )
                     context_windows.setdefault(chunk.chunk_id, 1)
-                context = contexts[chunk.chunk_id]
+                prepared.append((index, hit, contexts[chunk.chunk_id]))
+
+            cache_identity = getattr(select_evidence, "assessment_cache_identity", None)
+            cache_hits: list[bool] = []
+
+            def assess_one(index, hit, context, components):
+                chunk, _score = hit
+                key = None
+                if workflow_cache is not None and cache_identity:
+                    key = assessment_cache_key(
+                        {
+                            "identity": cache_identity,
+                            "claim": state["claim"]["text"],
+                            "chunk_id": chunk.chunk_id,
+                            "citation": citation_label(chunk.paper),
+                            "page": chunk.page,
+                            "evidence_role": chunk.evidence_role,
+                            "content_kind": chunk.content_kind,
+                            "context": context,
+                            "components": list(components),
+                        }
+                    )
+                    cached = workflow_cache.get(key)
+                    if cached is not None:
+                        cache_hits.append(True)
+                        report(
+                            f"{phase_name} passage {index}/{len(finalists)} · "
+                            "reused assessment"
+                        )
+                        return chunk.chunk_id, cached
+                cache_hits.append(False)
                 report(
                     f"{phase_name} passage {index}/{len(finalists)} · "
                     "waiting for model response"
                 )
                 kwargs = (
-                    {"components": component_names}
-                    if component_names and _accepts_keyword(select_evidence, "components")
+                    {"components": components}
+                    if components and _accepts_keyword(select_evidence, "components")
                     else {}
                 )
                 if timings is None:
@@ -272,9 +391,49 @@ def build_evidence_workflow(
                         selected = select_evidence(
                             state["claim"]["text"], hit, context, **kwargs
                         )
-                assessment_results[chunk.chunk_id] = _normalise_assessment(selected, context)
+                cacheable = not (
+                    isinstance(selected, dict)
+                    and selected.get("__cacheable__", True) is False
+                )
+                if isinstance(selected, dict) and "__cacheable__" in selected:
+                    selected = {
+                        key: value
+                        for key, value in selected.items()
+                        if key != "__cacheable__"
+                    }
+                assessment = _normalise_assessment(selected, context)
+                if key is not None and cacheable:
+                    workflow_cache.set(key, assessment)
+                return chunk.chunk_id, assessment
+
+            prepared_results: dict[str, dict[str, object]] = {}
+            remaining = prepared
+            if not component_names and remaining:
+                # The first assessment establishes component names shared by the rest.
+                index, hit, context = remaining[0]
+                identifier, assessment = assess_one(index, hit, context, ())
+                prepared_results[identifier] = assessment
+                assessment_results[identifier] = assessment
+                component_names = _component_names(assessment_results)
+                remaining = remaining[1:]
+
+            for index, hit, context in remaining:
+                identifier, assessment = assess_one(
+                    index, hit, context, component_names
+                )
+                prepared_results[identifier] = assessment
+                assessment_results[identifier] = assessment
                 if not component_names:
                     component_names = _component_names(assessment_results)
+
+            if cache_hits:
+                report(f"Evidence assessment cache · {sum(cache_hits)} reused · "
+                       f"{len(cache_hits) - sum(cache_hits)} model call(s)")
+
+            for _index, hit, _context in prepared:
+                identifier = hit[0].chunk_id
+                if identifier in prepared_results:
+                    assessment_results[identifier] = prepared_results[identifier]
             reclassified = sum(
                 old_assessments.get(identifier)
                 != _assessment_classification_signature(value)
@@ -645,6 +804,7 @@ def _synthesize_cross_paper(items: Sequence[dict]) -> dict[str, object]:
             {
                 "source_id": source_id,
                 "title": chunk.paper.title,
+                "citation_key": chunk.paper.citation_key,
                 "page": chunk.page,
                 "relation": relation,
                 "matched_quote": item.get("matched_excerpt"),
@@ -690,8 +850,6 @@ def _synthesize_cross_paper(items: Sequence[dict]) -> dict[str, object]:
         if scope_variation:
             summary += " Stated scope differs across papers."
         summary += " This is descriptive, not a pooled estimate."
-        summary += " Passages from one paper are not independent confirmations; "
-        summary += "independence across papers is unverified."
     component_coverage = _aggregate_claim_components(items)
     unresolved_questions = [
         {
@@ -702,11 +860,6 @@ def _synthesize_cross_paper(items: Sequence[dict]) -> dict[str, object]:
         for component in component_coverage
         if component["status"] in {"partial", "unresolved", "contested"}
     ]
-    quantitative_findings = [
-        source
-        for source in sources
-        if source.get("matched_quote") and re.search(r"\d", str(source["matched_quote"]))
-    ]
     return {
         "summary": summary,
         "conclusion": _overall_conclusion(paper_counts, component_coverage),
@@ -714,9 +867,7 @@ def _synthesize_cross_paper(items: Sequence[dict]) -> dict[str, object]:
         "paper_count": len(paper_relations),
         "passage_count": len(sources),
         "study_count": len(paper_relations),
-        "study_count_basis": (
-            "counted by distinct source paper; independence across papers is unverified"
-        ),
+        "study_count_basis": "counted by distinct source paper",
         "claim_coverage": component_coverage,
         "unresolved_questions": unresolved_questions,
         "revision_guidance": (
@@ -725,7 +876,6 @@ def _synthesize_cross_paper(items: Sequence[dict]) -> dict[str, object]:
             if unresolved_questions
             else "No material claim qualification was left unresolved by the selected evidence."
         ),
-        "quantitative_findings": quantitative_findings,
         "sources": sources,
         "source_ids_by_relation": relation_sources,
         "relation_passages": relation_passages,
@@ -760,6 +910,8 @@ def _aggregate_claim_components(items: Sequence[dict]) -> list[dict[str, object]
                         str(component.get("evidence_quote", "")).split()
                     ),
                     "source_title": item["chunk"].paper.title,
+                    "zotero_key": source_id,
+                    "citation_key": item["chunk"].paper.citation_key,
                     "page": item["chunk"].page,
                 }
             )
@@ -794,8 +946,16 @@ def _aggregate_claim_components(items: Sequence[dict]) -> list[dict[str, object]
         )
         component_evidence = list(
             {
-                (assessment["source_title"], assessment["page"], assessment["evidence_quote"]): {
+                (
+                    assessment["source_title"],
+                    assessment["zotero_key"],
+                    assessment["page"],
+                    assessment["citation_key"],
+                    assessment["evidence_quote"],
+                ): {
                     "title": assessment["source_title"],
+                    "zotero_key": assessment["zotero_key"],
+                    "citation_key": assessment["citation_key"],
                     "page": assessment["page"],
                     "quote": assessment["evidence_quote"],
                 }

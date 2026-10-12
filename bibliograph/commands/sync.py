@@ -6,7 +6,6 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
-from rich.console import Console
 from rich.progress import (
     BarColumn,
     Progress,
@@ -18,6 +17,7 @@ from rich.progress import (
 
 from ..adapters.acquisition import acquire_pdf
 from ..adapters.zotero import discover_collection, resolve_collection
+from ..logging_utils import stderr_console
 from .indexing import index_available_document
 from .progress import StageProgress
 
@@ -31,6 +31,7 @@ def sync_library(
     extract_pages: Callable,
     storage_dirs: Iterable[str | Path] = (),
     collection: str | None = None,
+    rebuild: bool = False,
     show_progress: bool = True,
     force_reindex: bool = False,
 ) -> dict[str, Any]:
@@ -38,7 +39,7 @@ def sync_library(
     identifier = collection or str(settings["collection"])
     pdf_dir = settings["pdf_dir"]
     if show_progress:
-        with Console(stderr=True).status("Discovering Zotero collection…", spinner="dots"):
+        with stderr_console().status("Discovering Zotero collection…", spinner="dots"):
             collection_key = resolve_collection(zotero, identifier)
             documents = discover_collection(
                 zotero,
@@ -56,6 +57,8 @@ def sync_library(
         )
     summary: dict[str, Any] = {
         "collection": collection_key,
+        "collection_input": identifier,
+        "rebuild": rebuild,
         "discovered": len(documents),
         "indexed": [],
         "unchanged": [],
@@ -70,7 +73,7 @@ def sync_library(
             BarColumn(),
             TaskProgressColumn(),
             TimeElapsedColumn(),
-            console=Console(stderr=True),
+            console=stderr_console(),
             transient=True,
         )
         if show_progress and documents

@@ -7,15 +7,21 @@ document dictionaries so indexing can be tested without a live service.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import shutil
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from bibliograph.adapters.pdf import is_pdf_file, locate_local_pdf
 from bibliograph.domain import Paper
+from bibliograph.logging_utils import get_logger
+
+logger = get_logger("zotero")
 
 PAPER_ITEM_TYPES = frozenset(
     {
@@ -92,6 +98,7 @@ def discover_collection(
     documents: list[dict[str, Any]] = []
     storage_dirs = tuple(storage_dirs)
     collection = str(collection_key)
+    bibtex_info: dict[str, tuple[str | None, str | None]] = {}
     for item in client.everything(client.collection_items(collection)):
         data = _data(item)
         parent_key = data.get("key")
@@ -99,6 +106,14 @@ def discover_collection(
         if not parent_key or item_type == "attachment" or not is_paper_item(item_type):
             continue
         paper = paper_from_zotero_item(item, collections=(collection,))
+        parent_key = str(parent_key)
+        if parent_key not in bibtex_info:
+            bibtex_info[parent_key] = _exported_bibtex_info(client, parent_key)
+        exported_key, bibtex_fingerprint = bibtex_info[parent_key]
+        if exported_key:
+            paper = replace(paper, citation_key=exported_key)
+        elif paper.citation_key:
+            bibtex_fingerprint = hashlib.sha256(paper.citation_key.encode("utf-8")).hexdigest()
         attachments = [
             child
             for child in client.children(parent_key)
@@ -110,6 +125,7 @@ def discover_collection(
                     paper=paper,
                     source_key=str(parent_key),
                     version=data.get("version"),
+                    bibtex_fingerprint=bibtex_fingerprint,
                     attachment_key=None,
                     parent_key=str(parent_key),
                     item_type=str(item_type),
@@ -128,6 +144,7 @@ def discover_collection(
                     paper=paper,
                     source_key=str(attachment_key),
                     version=attachment_data.get("version"),
+                    bibtex_fingerprint=bibtex_fingerprint,
                     attachment_key=str(attachment_key),
                     parent_key=str(parent_key),
                     item_type=str(item_type),
@@ -156,6 +173,9 @@ def paper_from_zotero_item(
         year=date[:4] or None,
         doi=str(data["DOI"]) if data.get("DOI") else None,
         collections=tuple(str(value) for value in collections),
+        citation_key=(str(data["citationKey"]).strip() or None)
+        if data.get("citationKey")
+        else None,
     )
 
 
@@ -295,12 +315,16 @@ def _document_record(
     paper: Paper,
     source_key: str,
     version: Any,
+    bibtex_fingerprint: str | None,
     attachment_key: str | None,
     parent_key: str,
     item_type: str,
     pdf_dir: str | Path | None,
     storage_dirs: Iterable[str | Path],
 ) -> dict[str, Any]:
+    indexed_version = version
+    if bibtex_fingerprint:
+        indexed_version = f"{version or ''}|bibtex-sha256={bibtex_fingerprint}"
     candidates: list[str] = []
     if pdf_dir is not None:
         directory = Path(pdf_dir)
@@ -316,7 +340,7 @@ def _document_record(
     return {
         "paper": paper,
         "source_key": source_key,
-        "version": version,
+        "version": indexed_version,
         "path_candidates": tuple(dict.fromkeys(candidates)),
         "attachment_key": attachment_key,
         "parent_key": parent_key,
@@ -341,6 +365,51 @@ def _cache_candidates(
 def _data(item: Mapping[str, Any]) -> Mapping[str, Any]:
     value = item.get("data", item)
     return value if isinstance(value, Mapping) else {}
+
+
+def _exported_bibtex_info(client: Any, item_key: str) -> tuple[str | None, str | None]:
+    """Return the Zotero BibTeX entry key and a fingerprint for change detection."""
+    export_item = getattr(client, "item", None)
+    if not callable(export_item):
+        return None, None
+    try:
+        exported = export_item(item_key, format="bibtex")
+    except Exception as error:
+        logger.warning("Could not fetch BibTeX export for Zotero item %s: %s", item_key, error)
+        return None, None
+
+    entries = getattr(exported, "entries", None)
+    if entries is None and isinstance(exported, Mapping):
+        entries = [exported]
+    if entries is None and isinstance(exported, str):
+        key = _bibtex_key_from_text(exported)
+        fingerprint = hashlib.sha256(exported.encode("utf-8")).hexdigest() if exported else None
+        return key, fingerprint
+    if entries is None:
+        return None, None
+
+    entries = list(entries)
+    key = None
+    for entry in entries:
+        if isinstance(entry, Mapping):
+            value = entry.get("ID") or entry.get("id")
+            if value:
+                key = str(value).strip() or None
+                break
+        elif isinstance(entry, str):
+            key = _bibtex_key_from_text(entry)
+            if key:
+                break
+    payload = json.dumps(
+        entries, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":")
+    )
+    fingerprint = hashlib.sha256(payload.encode("utf-8")).hexdigest() if entries else None
+    return key, fingerprint
+
+
+def _bibtex_key_from_text(text: str) -> str | None:
+    match = re.search(r"@\s*[A-Za-z][\w:-]*\s*[{(]\s*([^,\s]+)\s*,", text)
+    return match.group(1).strip() if match else None
 
 
 def _setting(config: Mapping[str, Any] | object, key: str, default: Any = None) -> Any:

@@ -173,6 +173,11 @@ _EVIDENCE_SCHEMA: dict[str, object] = {
     },
 }
 
+# Bump when reranking instructions or score interpretation changes.
+RERANK_CACHE_VERSION = "evidence-rerank-v1"
+# Bump when the evidence assessment instructions or output interpretation changes.
+EVIDENCE_ASSESSMENT_CACHE_VERSION = "evidence-assessment-v1"
+
 
 def heuristic_expand(claim: str, *, progress: ProgressUpdate | None = None) -> list[str]:
     """Return no extra queries when LLM expansion is disabled or unavailable."""
@@ -228,15 +233,26 @@ def refine_queries(
         {
             "role": "system",
             "content": (
-                "Propose at most four targeted follow-up queries for the original claim. "
-                "Treat the supplied evidence ledger as the baseline: identify explicit "
-                "uncertainties in the assessed passages (such as a missing population, unit, "
-                "outcome, geography, time period, or a mixed finding) and make each query "
-                "address one such gap using terminology present in the source material. Do "
-                "not generate queries from general associations or model background knowledge, "
-                "do not invent entities or relations, and do not broaden the claim. If the ledger "
-                "does not reveal a specific gap that another search could address, return an "
-                "empty list. Return JSON only as {\"queries\": [\"...\"]}."
+                "Propose zero to three targeted search queries for the original claim. "
+                "The queries will be sent to a literature search engine. Treat the assessed "
+                "evidence ledger as context for identifying a specific evidence gap, then write "
+                "each query as one concise, searchable phrase of about 3–7 words. Use plain "
+                "natural-language terms likely to occur in papers. Do not use Boolean operators "
+                "such as AND/OR/NOT, quotation marks, commas, or semicolon-separated concepts. "
+                "Target one missing relationship, outcome, population, "
+                "unit, geography, time period, or conflicting result when another search could "
+                "plausibly find it. Keep each query focused on one evidence gap; do not combine "
+                "unrelated papers, outcomes, or geographies into one query. Keep the original "
+                "claim's meaning and scope. Do not ask the "
+                "user for clarification or ask questions about the claim or ledger. Do not write "
+                "questions, instructions, or meta-text such as 'as referenced in the evidence "
+                "ledger'; do not ask what a claim means or request information from the user. "
+                "For an undefined term or magnitude, search for relevant definitions, measures, "
+                "or empirical benchmarks in the literature only when these could resolve the gap; "
+                "never invent a threshold. Do not add unsupported entities, locations, numbers, "
+                "or relationships, and do not produce duplicate paraphrases. Return an empty list "
+                "when no useful literature search can address the gap. Return JSON only as "
+                "{\"queries\": [\"...\"]}."
             ),
         },
         {
@@ -253,11 +269,28 @@ def refine_queries(
     queries = payload.get("queries", [])
     if not isinstance(queries, list):
         return []
-    return [
-        " ".join(query.split()).strip()
-        for query in queries
-        if isinstance(query, str) and query.strip() and len(query) <= 500
-    ][:4]
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for query in queries:
+        if not isinstance(query, str):
+            continue
+        text = query.strip().strip("\"'`“”‘’.,;:")
+        text = re.sub(r"[\"`“”‘’]", "", text)
+        text = re.sub(r"\b(?:AND|OR|NOT)\b", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"[,;]+", " ", text)
+        text = " ".join(text.split()).strip(" .,:;-")
+        lexical_term_count = len(re.findall(r"[^\W_]+", text, flags=re.UNICODE))
+        key = text.casefold()
+        if (
+            3 <= lexical_term_count <= 8
+            and len(text) <= 120
+            and key not in seen
+        ):
+            cleaned.append(text)
+            seen.add(key)
+        if len(cleaned) == 3:
+            break
+    return cleaned
 
 
 def _expansion_messages(claim: str, perspective: str, types: Sequence[str]) -> list[dict]:
@@ -266,11 +299,17 @@ def _expansion_messages(claim: str, perspective: str, types: Sequence[str]) -> l
             "role": "system",
             "content": (
                 f"Create alternate search queries from the {perspective} perspective. "
-                "Return JSON only with an 'items' array. Each item must contain type "
-                "and text. Generate at most one useful item for each requested type: "
+                "Each text will be sent directly to a literature search engine, so write it "
+                "as a concise, searchable phrase made from relevant claim concepts and terms "
+                "likely to appear in papers. Use a phrase, not a question, instruction, or "
+                "request for clarification. Never refer to an evidence ledger or ask the user "
+                "for missing information. Preserve the claim's meaning and scope. Return JSON "
+                "only with an 'items' array. Each item must contain type and text. Generate at "
+                "most one useful item for each requested type: "
                 + ", ".join(types)
-                + ". Preserve the claim's meaning; do not invent entities, numbers, "
-                "or citations. Keep each query concise and searchable."
+                + ". Do not invent entities, numbers, citations, or unsupported relationships. "
+                "Avoid near-duplicate paraphrases; return no item when that type adds no useful "
+                "search direction."
             ),
         },
         {"role": "user", "content": f"CLAIM:\n{claim}"},

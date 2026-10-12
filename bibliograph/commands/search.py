@@ -4,12 +4,12 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.text import Text
 
 from ..pipeline.retrieval import DEFAULT_SEARCH_LIMIT, search_claim
 from ..pipeline.timing import format_workflow_timings
+from ..logging_utils import stderr_console
 from ..render import render_search
 
 
@@ -162,6 +162,6 @@ def _progress_context(show_progress: bool):
         SpinnerColumn(style="cyan"),
         TimeElapsedColumn(),
         TextColumn("[bold cyan]{task.description}"),
-        console=Console(stderr=True),
+        console=stderr_console(),
         transient=True,
     )

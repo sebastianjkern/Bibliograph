@@ -16,16 +16,28 @@ class TimingRecorder:
         self._lock = Lock()
         self._durations: dict[str, float] = defaultdict(float)
         self._counts: dict[str, int] = defaultdict(int)
+        self._active: dict[str, tuple[int, float]] = {}
 
     @contextmanager
     def measure(self, stage: str) -> Iterator[None]:
         started = perf_counter()
+        with self._lock:
+            active = self._active.get(stage)
+            if active is None:
+                self._active[stage] = (1, started)
+            else:
+                self._active[stage] = (active[0] + 1, active[1])
         try:
             yield
         finally:
-            elapsed = perf_counter() - started
+            finished = perf_counter()
             with self._lock:
-                self._durations[stage] += elapsed
+                active_count, active_started = self._active[stage]
+                if active_count == 1:
+                    self._durations[stage] += finished - active_started
+                    del self._active[stage]
+                else:
+                    self._active[stage] = (active_count - 1, active_started)
                 self._counts[stage] += 1
 
     def snapshot(self) -> dict[str, dict[str, float | int]]:

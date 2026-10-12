@@ -15,15 +15,6 @@ def render_search(
     synthesis: dict | None = None,
 ) -> str:
     items = _sorted_items(items)
-
-    assessed_relations = {"supports", "partial", "contradicts", "mixed", "insufficient"}
-    assessed = [
-        item
-        for item in items
-        if item.get("evidence_relation") in assessed_relations
-    ]
-    displayable = [item for item in assessed if item.get("evidence_relation") != "insufficient"]
-    shown = items if verbose else displayable[:3]
     lines = ["# Local sources", ""]
 
     synthesis_lines = (
@@ -31,7 +22,7 @@ def render_search(
         if synthesis and synthesis.get("sources")
         else []
     )
-    if not shown:
+    if not items:
         lines.extend(
             [
                 "No assessed supporting or contradicting evidence was found.",
@@ -39,27 +30,11 @@ def render_search(
             ]
         )
     if verbose:
-        paper_groups = _group_by_paper(shown)
+        paper_groups = _group_by_paper(items)
         if paper_groups:
             lines.extend(["## Source-level evidence", ""])
         for index, group in enumerate(paper_groups, start=1):
             lines.extend(_render_paper_card(index, group, verbose=True))
-    if not verbose and len(displayable) > len(shown):
-        lines.extend(
-            [
-                f"Showing {len(shown)} of {len(displayable)} passages with a non-unresolved "
-                f"assessment. Use --verbose to see all {len(items)} selected passages.",
-                "",
-            ]
-        )
-    if not verbose and assessed and not displayable:
-        lines.extend(
-            [
-                "No selected passage had a supporting, partial, contradicting, "
-                "or mixed assessment.",
-                "",
-            ]
-        )
     if synthesis_lines:
         lines.extend(synthesis_lines)
     return "\n".join(lines).rstrip() + "\n"
@@ -90,32 +65,44 @@ def render_check(items: Iterable[dict], *, verbose: bool = False) -> str:
 def _render_claim_synthesis(
     synthesis: dict, *, heading: str = "### Claim assessment"
 ) -> list[str]:
-    study_count = int(synthesis.get("study_count", synthesis.get("paper_count", 0)))
-    study_label = "distinct source paper" if study_count == 1 else "distinct source papers"
-    lines = ([heading, ""] if heading else []) + [
-        f"**Evidence base:** {study_count} {study_label}, "
-        + f"{synthesis.get('passage_count', 0)} assessed passage(s). "
-        + "Passages from one paper are not independent confirmations; "
-        + "independence across papers is unverified.",
-    ]
+    assessed_papers = int(synthesis.get("study_count", synthesis.get("paper_count", 0)))
+    assessed_passages = int(synthesis.get("passage_count", 0))
     components = synthesis.get("claim_coverage", [])
+    quoted_papers = {
+        _paper_identity(evidence)
+        for component in components
+        if isinstance(component, dict)
+        for evidence in component.get("evidence", [])
+        if isinstance(evidence, dict) and evidence.get("quote")
+    }
+    quoted_count = len(quoted_papers)
+    quoted_label = "distinct source paper" if quoted_count == 1 else "distinct source papers"
+    assessed_paper_label = "distinct source paper" if assessed_papers == 1 else "distinct source papers"
+    assessed_passage_label = "passage" if assessed_passages == 1 else "passages"
+    lines = ([heading, ""] if heading else []) + [
+        f"**Evidence base:** {quoted_count} {quoted_label} cited in claim coverage.",
+        f"**Assessment scope:** {assessed_passages} {assessed_passage_label} from {assessed_papers} "
+        f"{assessed_paper_label} assessed; these counts describe review scope, not the verdict.",
+    ]
     if components:
         lines.extend(["", "**Claim coverage:**", ""])
         for component in components:
             status = str(component.get("status", "unresolved")).replace("_", " ")
+            status_label = status.title()
+            if status.casefold() == "contradicted":
+                status_label = f"⟦contradict⟧{status_label}⟦/contradict⟧"
             reason = str(component.get("reason", "")).strip()
-            line = f"- **{status.title()} — {component.get('name', 'Claim component')}**"
+            line = f"- {status_label} — **{component.get('name', 'Claim component')}**"
             if reason:
                 line += f": {reason}"
             lines.append(line)
             for evidence in component.get("evidence", []):
                 if not isinstance(evidence, dict) or not evidence.get("quote"):
                     continue
-                page = f", p. {evidence['page']}" if evidence.get("page") else ""
                 lines.extend(
                     [
                         f"  - “{evidence['quote']}”",
-                        f"    — {evidence.get('title', 'Source')}{page}",
+                        f"    — {_source_attribution(evidence)}",
                     ]
                 )
     questions = synthesis.get("unresolved_questions", [])
@@ -128,17 +115,18 @@ def _render_claim_synthesis(
             lines.append(line)
     if synthesis.get("revision_guidance"):
         lines.extend(["", "**Verdict:** " + str(synthesis["revision_guidance"])])
-    quantitative = synthesis.get("quantitative_findings", [])
-    if quantitative:
-        lines.extend(["", "**Reported numeric source statements** (not pooled):"])
-        for finding in quantitative:
-            page = f", p. {finding['page']}" if finding.get("page") else ""
-            lines.append(
-                f"- {finding.get('title', 'Source')}{page}: “{finding['matched_quote']}”"
-            )
     coverage = _passage_coverage_accounting(str(synthesis.get("summary", "")))
-    lines.extend(["", "**Passage-level coverage:** " + _colorize_passage_counts(coverage), ""])
+    lines.extend(["", "**Assessment coverage:** " + _colorize_passage_counts(coverage), ""])
     return lines
+
+
+def _paper_identity(evidence: dict) -> str:
+    zotero_key = str(evidence.get("zotero_key") or "").strip()
+    if zotero_key:
+        return f"zotero:{zotero_key.casefold()}"
+    citation_key = str(evidence.get("citation_key") or "").strip().casefold()
+    title = str(evidence.get("title") or "").strip().casefold()
+    return citation_key or title
 
 
 def _passage_coverage_accounting(summary: str) -> str:
@@ -162,8 +150,10 @@ def _passage_coverage_accounting(summary: str) -> str:
         f"{match.group(1) if match else '0'} {label}"
         for label, match in relation_counts.items()
     ]
+    paper_count = int(evidence.group(1))
+    paper_label = "paper" if paper_count == 1 else "papers"
     return (
-        f"{evidence.group(1)} papers · {evidence.group(2)} passages"
+        f"{paper_count} {paper_label} · {evidence.group(2)} passages"
         + (" · " + " · ".join(counts) if counts else "")
     )
 
@@ -195,6 +185,15 @@ def _group_by_paper(items: Iterable[dict]) -> list[list[dict]]:
     return list(groups.values())
 
 
+def _source_attribution(source: dict) -> str:
+    title = str(source.get("title") or "Source")
+    page = f"p. {source['page']}" if source.get("page") else None
+    citation_key = source.get("citation_key")
+    key_label = f"**{citation_key}**" if citation_key else None
+    details = [detail for detail in (page, key_label) if detail]
+    return f"*{title}*" + (f" · {' · '.join(details)}" if details else "")
+
+
 def _render_paper_card(number: int, items: list[dict], *, verbose: bool) -> list[str]:
     paper = items[0]["chunk"].paper
     title = _display_title(paper.title)
@@ -204,6 +203,7 @@ def _render_paper_card(number: int, items: list[dict], *, verbose: bool) -> list
             "| Source details | Value |",
             "| :--- | :--- |",
             f"| **Title** | {_table_cell(title)} |",
+            f"| **BibTeX key** | {_table_cell(paper.citation_key or 'unknown')} |",
             f"| **DOI** | {_table_cell(paper.doi or 'unknown')} |",
             "",
         ]
@@ -279,6 +279,7 @@ def _render_source_card(
         "| Detail | Value |",
         "| :--- | :--- |",
         f"| **Title** | {_table_cell(display_title)} |",
+        f"| **BibTeX key** | {_table_cell(paper.citation_key or 'unknown')} |",
         f"| **DOI** | {_table_cell(paper.doi or 'unknown')} |",
         f"| **Page** | {chunk.page or 'unknown'} |",
     ]
@@ -435,7 +436,9 @@ def render_sync(summary: dict) -> str:
     lines = [
         "# Synchronization complete",
         "",
-        f"- **Collection:** {summary['collection']}",
+        f"- **Operation:** {'Rebuild' if summary.get('rebuild') else 'Regular sync'}",
+        f"- **Collection selected:** {summary.get('collection_input', summary['collection'])}",
+        f"- **Resolved Zotero key:** {summary['collection']}",
         f"- **Discovered:** {summary['discovered']}",
         f"- **Indexed:** {len(summary['indexed'])}",
         f"- **Unchanged:** {len(summary['unchanged'])}",

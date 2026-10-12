@@ -7,7 +7,6 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from rich.console import Console
 from rich.progress import (
     BarColumn,
     Progress,
@@ -19,6 +18,7 @@ from rich.progress import (
 
 from ..adapters.pdf import is_pdf_file
 from ..domain import Paper
+from ..logging_utils import stderr_console
 from .indexing import index_available_document
 from .progress import StageProgress
 
@@ -56,7 +56,7 @@ def ingest_pdfs(
             BarColumn(),
             TaskProgressColumn(),
             TimeElapsedColumn(),
-            console=Console(stderr=True),
+            console=stderr_console(),
             transient=True,
         )
         if show_progress and pdfs

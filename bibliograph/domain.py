@@ -22,6 +22,7 @@ class Paper:
     year: str | None = None
     doi: str | None = None
     collections: tuple[str, ...] = ()
+    citation_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

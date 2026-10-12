@@ -5,8 +5,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from rich.console import Console
 from rich.progress import Progress
+
+from ..logging_utils import stderr_console
 
 
 class StageProgress:
@@ -15,7 +16,7 @@ class StageProgress:
     def __init__(self, progress: Progress, task_id: Any) -> None:
         self.progress = progress
         self.task_id = task_id
-        self.console = progress.console or Console(stderr=True)
+        self.console = progress.console or stderr_console()
         self._stage: str | None = None
         self._description: str | None = None
 

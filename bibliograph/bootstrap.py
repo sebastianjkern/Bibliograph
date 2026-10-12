@@ -7,6 +7,7 @@ callables or small stateful resources instead of selecting implementations.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable
 from functools import wraps
 from pathlib import Path
@@ -38,6 +39,8 @@ from .commands.sync import sync_library
 from .logging_utils import get_logger
 from .pipeline.classification import paper_evidence_strategy
 from .pipeline.llm_tasks import (
+    EVIDENCE_ASSESSMENT_CACHE_VERSION,
+    RERANK_CACHE_VERSION,
     expand_query,
     explain,
     heuristic_expand,
@@ -52,6 +55,12 @@ from .pipeline.retrieval import DEFAULT_SEARCH_LIMIT
 from .settings import Settings
 
 logger = get_logger("bootstrap")
+
+
+class _UncacheableList(list):
+    """Mark optional fallback results so they are never persisted as model output."""
+
+    cacheable = False
 
 
 def run_sync(
@@ -87,6 +96,7 @@ def run_sync(
                 extract_pages=extract_pages,
                 storage_dirs=storage_dirs,
                 collection=collection,
+                rebuild=True,
                 show_progress=show_progress,
                 force_reindex=force_reindex,
             )
@@ -106,6 +116,7 @@ def run_sync(
             extract_pages=extract_pages,
             storage_dirs=storage_dirs,
             collection=collection,
+            rebuild=False,
             show_progress=show_progress,
             force_reindex=force_reindex,
         )
@@ -336,6 +347,27 @@ def _llm_tools(
                 raise
             logger.warning("LLM %s initialization unavailable; using fallback: %s", label, error)
             return fallback_tool
+        identity_settings = {
+            key: value
+            for key, value in stage_settings.items()
+            if key not in {"api_key", "token", "password"}
+        }
+        cache_identity = None
+        if stage in {"evidence", "rerank"}:
+            cache_version = (
+                EVIDENCE_ASSESSMENT_CACHE_VERSION
+                if stage == "evidence"
+                else RERANK_CACHE_VERSION
+            )
+            cache_identity = json.dumps(
+                {
+                    "version": cache_version,
+                    "settings": identity_settings,
+                },
+                sort_keys=True,
+                default=str,
+            )
+            setattr(primary, f"{stage}_cache_identity", cache_identity)
         if mode == "required":
             return primary
 
@@ -345,8 +377,15 @@ def _llm_tools(
                 return primary(*args, **kwargs)
             except Exception as error:
                 logger.warning("LLM %s unavailable; using fallback: %s", label, error)
-                return fallback_tool(*args, **kwargs)
+                result = fallback_tool(*args, **kwargs)
+                if stage == "evidence" and isinstance(result, dict):
+                    return {**result, "__cacheable__": False}
+                if stage == "rerank" and isinstance(result, list):
+                    return _UncacheableList(result)
+                return result
 
+        if cache_identity is not None:
+            setattr(run, f"{stage}_cache_identity", cache_identity)
         return run
 
     tools: dict[str, Callable] = {}
@@ -367,6 +406,18 @@ def _llm_tools(
                     progress=progress,
                 )
 
+            systemone_cache_identity = json.dumps(
+                {
+                    "version": RERANK_CACHE_VERSION,
+                    "strategy": "systemone",
+                    "provider": "ollama",
+                    "model": llm_settings.get("systemone_model") or "nimble",
+                    "workers": llm_settings.get("systemone_workers", 4),
+                },
+                sort_keys=True,
+            )
+            run_systemone_reranker.rerank_cache_identity = systemone_cache_identity
+
             if mode == "required":
                 tools["rerank"] = run_systemone_reranker
             else:
@@ -378,8 +429,9 @@ def _llm_tools(
                         logger.warning(
                             "Ollama reranking unavailable; using retrieval order: %s", error
                         )
-                        return heuristic_rerank(args[0], args[1])
+                        return _UncacheableList(heuristic_rerank(args[0], args[1]))
 
+                optional_systemone_reranker.rerank_cache_identity = systemone_cache_identity
                 tools["rerank"] = optional_systemone_reranker
         else:
             tools["rerank"] = stage_tool(

@@ -16,7 +16,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .bootstrap import run_check, run_ingest_pdfs, run_search, run_status, run_sync
-from .logging_utils import configure_logging, get_logger
+from .logging_utils import configure_logging, get_logger, stderr_console
 from .pipeline.retrieval import DEFAULT_SEARCH_LIMIT
 from .render import render_sync
 from .settings import load_settings
@@ -98,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     search = subparsers.add_parser("search", help="Search indexed sources for one claim")
     search.add_argument("claim")
     _add_query_options(search, one_per_paper=True)
-    search.add_argument("--verbose", action="store_true", help="Show all retrieved passages")
+    search.add_argument("--verbose", action="store_true", help="Show retrieval diagnostics")
 
     check = subparsers.add_parser(
         "check",
@@ -356,6 +356,14 @@ def _announce_command(args: argparse.Namespace, settings: dict[str, Any]) -> Non
             details.add_row("Claim workers", str(args.workers))
     elif args.command == "sync":
         details.add_row("Task", "Sync collection PDFs")
+        selected_collection = args.collection or settings.get("collection")
+        details.add_row("Collection", str(selected_collection))
+        rebuild = (
+            getattr(args, "rebuild", False)
+            or getattr(args, "rebuild_db", False)
+            or getattr(args, "subcommand_rebuild_db", False)
+        )
+        details.add_row("Operation", "Rebuild" if rebuild else "Regular sync")
     elif args.command in {"ingest-pdfs", "ingest"}:
         details.add_row("Task", "Index local PDFs")
     elif args.command == "status":
@@ -366,7 +374,7 @@ def _announce_command(args: argparse.Namespace, settings: dict[str, Any]) -> Non
         "check": "Bibliograph · Draft check",
         "legacy-suggest": "Bibliograph · Draft check",
     }.get(args.command, "Bibliograph")
-    Console(stderr=True).print(
+    stderr_console().print(
         Panel(
             details,
             title=f"[bold cyan]{title}[/bold cyan]",
@@ -514,7 +522,7 @@ def _emit(markdown: str, output: Path | None) -> None:
         "unresolved": "bold cyan",
     }
     console = Console()
-    coverage_heading = "**Passage-level coverage:** "
+    coverage_heading = "**Assessment coverage:** "
     coverage_start = markdown.find(coverage_heading)
     if coverage_start >= 0:
         paragraph_end = markdown.find("\n\n", coverage_start)
@@ -522,7 +530,7 @@ def _emit(markdown: str, output: Path | None) -> None:
             paragraph_end = len(markdown)
         _emit_marked_markdown(markdown[:coverage_start], marker_pattern, styles, console)
         paragraph = markdown[coverage_start + len(coverage_heading) : paragraph_end]
-        coverage_text = Text("Passage-level coverage:", style="bold")
+        coverage_text = Text("Assessment coverage:", style="bold")
         coverage_text.append(" ")
         position = 0
         for match in marker_pattern.finditer(paragraph):
