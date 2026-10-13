@@ -34,6 +34,7 @@ def sync_library(
     rebuild: bool = False,
     show_progress: bool = True,
     force_reindex: bool = False,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     """Synchronize one Zotero collection into an injected writable store."""
     identifier = collection or str(settings["collection"])
@@ -69,19 +70,18 @@ def sync_library(
     progress_cm = (
         Progress(
             SpinnerColumn(),
-            TextColumn("{task.description}"),
-            BarColumn(),
             TaskProgressColumn(),
             TimeElapsedColumn(),
+            TextColumn("{task.description}"),
             console=stderr_console(),
             transient=True,
         )
-        if show_progress and documents
+        if (show_progress or verbose) and documents
         else nullcontext()
     )
     with progress_cm as progress:
         task_id = None
-        if progress is not None and show_progress and documents:
+        if progress is not None and (show_progress or verbose) and documents:
             task_id = progress.add_task("Synchronizing documents", total=len(documents))
         stages = (
             StageProgress(progress, task_id)

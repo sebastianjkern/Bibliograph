@@ -12,18 +12,21 @@ from urllib.request import Request, urlopen
 from .pdf import _is_heading, _is_page_number, _is_reference_heading, extract_pages
 
 
-def configured_page_extractor(settings: Mapping[str, object]):
+def configured_page_extractor(settings: Mapping[str, object], verbose: bool = False):
     """Choose the configured PDF page extractor for the Ikarus ingestion seam."""
     options = settings.get("pdf_extraction", {})
-    if not isinstance(options, Mapping) or options.get("provider", "pymupdf") == "pymupdf":
+    if not isinstance(options, Mapping) or options.get("provider", "ollama") == "pymupdf":
         return extract_pages
     if options.get("provider") != "ollama":
         raise ValueError(f"Unsupported PDF extraction provider: {options.get('provider')}")
-    return make_ollama_page_extractor(
+    from ..pipeline.ingestion_workflow import make_hybrid_page_extractor
+
+    return make_hybrid_page_extractor(
         model=str(options["ollama_model"]),
         base_url=str(options["ollama_base_url"]),
         mode=str(options["ollama_mode"]),
         min_text_chars=int(options["min_text_chars"]),
+        verbose=verbose,
     )
 
 

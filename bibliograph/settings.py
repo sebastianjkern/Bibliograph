@@ -27,7 +27,7 @@ DEFAULT_SETTINGS: Settings = {
     "pdf_dir": "pdfs",
     "collection": "My Collection",
     "pdf_extraction": {
-        "provider": "pymupdf",
+        "provider": "ollama",
         "ollama_model": "ibm/granite-docling:258m",
         "ollama_base_url": "http://localhost:11434",
         "ollama_mode": "hybrid",

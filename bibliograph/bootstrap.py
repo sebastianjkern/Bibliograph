@@ -70,6 +70,7 @@ def run_sync(
     rebuild: bool = False,
     show_progress: bool = True,
     force_reindex: bool = False,
+    verbose: bool = False,
 ) -> dict:
     embedding = build_embedding(settings)
     # A successful HTTP listener is insufficient: this performs a capability
@@ -80,7 +81,7 @@ def run_sync(
     strategies = _acquisition_strategies(settings, zotero)
     storage_dirs = zotero_storage_dirs(settings.get("zotero_storage_dir"))
     database = settings["db"]
-    page_extractor = configured_page_extractor(settings)
+    page_extractor = configured_page_extractor(settings, verbose=verbose)
 
     if rebuild:
         with open_ikarus_staging(
@@ -100,6 +101,7 @@ def run_sync(
                 rebuild=True,
                 show_progress=show_progress,
                 force_reindex=force_reindex,
+                verbose=verbose,
             )
 
     with IkarusBackend(
@@ -120,6 +122,7 @@ def run_sync(
             rebuild=False,
             show_progress=show_progress,
             force_reindex=force_reindex,
+            verbose=verbose,
         )
 
 
@@ -130,11 +133,12 @@ def run_ingest_pdfs(
     recursive: bool = True,
     show_progress: bool = True,
     force_reindex: bool = False,
+    verbose: bool = False,
 ) -> dict:
     embedding = build_embedding(settings)
     embedding["probe"]()
     classification = _paper_evidence_strategy(settings)
-    page_extractor = configured_page_extractor(settings)
+    page_extractor = configured_page_extractor(settings, verbose=verbose)
     with IkarusBackend(
         settings["db"],
         mode="write",
@@ -149,6 +153,7 @@ def run_ingest_pdfs(
             recursive=recursive,
             show_progress=show_progress,
             force_reindex=force_reindex,
+            verbose=verbose,
         )
 
 

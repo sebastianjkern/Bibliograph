@@ -18,22 +18,27 @@ class StageProgress:
         self.task_id = task_id
         self.console = progress.console or stderr_console()
         self._stage: str | None = None
-        self._description: str | None = None
+        self._full_description: str | None = None
+        self._stage_description: str | None = None
 
     def update(self, description: str) -> None:
         stage = _stage_name(description)
+        # Print full description as a completed item when stage changes
         if self._stage is not None and stage != self._stage:
-            self.console.print(f"[green]✓[/green] {self._description}")
+            self.console.print(f"[green]✓[/green] {self._full_description}")
         self._stage = stage
-        self._description = description
-        self.progress.update(self.task_id, description=description, refresh=True)
+        self._full_description = description
+        # Use just the stage name for progress bar to prevent jumping
+        self._stage_description = stage
+        self.progress.update(self.task_id, description=self._stage_description, refresh=True)
 
     def complete(self, description: str) -> None:
-        if self._description is not None:
-            self.console.print(f"[green]✓[/green] {self._description}")
+        if self._full_description is not None:
+            self.console.print(f"[green]✓[/green] {self._full_description}")
         self._stage = _stage_name(description)
-        self._description = description
-        self.progress.update(self.task_id, description=description, refresh=True)
+        self._full_description = description
+        self._stage_description = description
+        self.progress.update(self.task_id, description=self._stage_description, refresh=True)
 
 
 def _stage_name(description: str) -> str:

@@ -9,6 +9,7 @@ import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from functools import lru_cache
+from inspect import Parameter, signature
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,18 @@ from ..pipeline.timing import TimingRecorder
 from .context import join_chunk_context
 
 INDEX_SCHEMA_VERSION = 1
+
+
+def _accepts_keyword(function, name: str) -> bool:
+    try:
+        parameters = signature(function).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in parameters or any(
+        parameter.kind is Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+
+
 GRAPH_PROFILE_FINGERPRINT = "bibliograph-paper-sections@1"
 LEXICAL_SCHEMA_VERSION = 1
 
@@ -290,7 +303,10 @@ class IkarusBackend:
         self._require_write()
         if progress is not None:
             progress("Extracting PDF pages")
-        pages = extract_pages(document.path)
+        if progress is not None and _accepts_keyword(extract_pages, "progress"):
+            pages = extract_pages(document.path, progress=progress)
+        else:
+            pages = extract_pages(document.path)
         chunks = _chunk_paper(document.paper, pages)
         if progress is not None:
             progress(f"Prepared {len(chunks)} chunks")

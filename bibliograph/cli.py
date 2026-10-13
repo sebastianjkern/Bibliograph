@@ -74,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force reindex PDFs in the selected Zotero collection",
     )
     sync.add_argument("--output", type=Path, help="Write the synchronization summary to a file")
+    sync.add_argument("--verbose", action="store_true", help="Show detailed processing output")
 
     ingest = subparsers.add_parser(
         "ingest-pdfs",
@@ -94,6 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force reindex PDFs found in this directory",
     )
     ingest.add_argument("--output", type=Path, help="Write the ingestion summary to a file")
+    ingest.add_argument("--verbose", action="store_true", help="Show detailed processing output")
 
     search = subparsers.add_parser("search", help="Search indexed sources for one claim")
     search.add_argument("claim")
@@ -246,6 +248,7 @@ def main(argv: list[str] | None = None) -> int:
                 rebuild=args.rebuild or legacy_rebuild,
                 show_progress=not args.quiet,
                 force_reindex=args.reset_pdf_index,
+                verbose=getattr(args, "verbose", False),
             )
             _emit(render_sync(result), args.output)
             return 0
@@ -259,6 +262,7 @@ def main(argv: list[str] | None = None) -> int:
                 recursive=not args.non_recursive,
                 show_progress=not args.quiet,
                 force_reindex=args.reset_pdf_index,
+                verbose=getattr(args, "verbose", False),
             )
             _emit(_render_ingest_summary(result), args.output)
             return 0
@@ -333,6 +337,7 @@ def _announce_command(args: argparse.Namespace, settings: dict[str, Any]) -> Non
         return
     embedding = settings.get("embedding", {})
     llm = settings.get("llm", {})
+    pdf_extraction = settings.get("pdf_extraction", {})
     details = Table.grid(padding=(0, 1))
     details.add_column(style="bright_black")
     details.add_column(style="#767676")
@@ -346,6 +351,14 @@ def _announce_command(args: argparse.Namespace, settings: dict[str, Any]) -> Non
     for stage, provider, model, enabled in _llm_stage_overview(llm):
         status = "[green]active[/green]" if enabled else "[bright_black]inactive[/bright_black]"
         details.add_row(f"{stage}", f"{provider} · {model} · {status}")
+    ocr_provider = pdf_extraction.get("provider", "")
+    if ocr_provider:
+        if ocr_provider == "ollama":
+            ocr_model = pdf_extraction.get("ollama_model", pdf_extraction.get("model", ""))
+        else:
+            ocr_model = pdf_extraction.get("model", "")
+        if ocr_model:
+            details.add_row("OCR", f"{ocr_provider} · {ocr_model}")
     if args.command not in {"search", "legacy-search", "check", "legacy-suggest"}:
         details.add_row("Index", str(settings.get("db")))
     if args.command in {"search", "legacy-search"}:

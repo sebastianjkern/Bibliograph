@@ -5,10 +5,9 @@ db = "bibliograph.db"
 pdf_dir = "pdfs"
 collection = "My Collection"
 
-# Optional local page OCR. Set provider = "ollama" to OCR scanned or poor-text
-# pages with Granite Docling; in hybrid mode clean embedded PDF text stays native.
+# Local hybrid OCR and block classification through the LangGraph pipeline.
 [profiles.default.pdf_extraction]
-provider = "pymupdf" # set to "ollama" to enable local vision OCR
+provider = "ollama"
 ollama_model = "ibm/granite-docling:258m"
 ollama_base_url = "http://localhost:11434"
 ollama_mode = "hybrid" # "all" sends every page through the model

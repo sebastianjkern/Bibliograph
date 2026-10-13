@@ -24,7 +24,12 @@ def index_available_document(
     force_reindex: bool = False,
 ) -> dict[str, Any]:
     """Skip unchanged files and index changed PDFs through the same backend path."""
-    if not force_reindex and not store.needs_document(source_key, version, path):
+    extractor_fingerprint = getattr(extract_pages, "indexing_fingerprint", None)
+    effective_version = version
+    if extractor_fingerprint:
+        effective_version = f"{version or ''}:extractor={extractor_fingerprint}"
+
+    if not force_reindex and not store.needs_document(source_key, effective_version, path):
         return {"state": "unchanged", "source_key": source_key, "chunks": 0}
 
     try:
@@ -38,7 +43,7 @@ def index_available_document(
                     source_key=source_key,
                     paper=paper,
                     path=Path(path),
-                    version=None if version is None else str(version),
+                    version=None if effective_version is None else str(effective_version),
                     metadata=metadata or {},
                 ),
                 **kwargs,
@@ -47,7 +52,7 @@ def index_available_document(
             result = store.index_pdf(
                 paper,
                 source_key,
-                version,
+                effective_version,
                 path,
                 extract_pages=extract_pages,
             )
@@ -57,7 +62,7 @@ def index_available_document(
             record_failure(
                 paper,
                 source_key,
-                version,
+                effective_version,
                 state="failed",
                 detail=str(error),
                 path=path,
