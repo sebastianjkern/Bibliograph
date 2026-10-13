@@ -26,6 +26,13 @@ DEFAULT_SETTINGS: Settings = {
     "db": "bibliograph.db",
     "pdf_dir": "pdfs",
     "collection": "My Collection",
+    "pdf_extraction": {
+        "provider": "pymupdf",
+        "ollama_model": "ibm/granite-docling:258m",
+        "ollama_base_url": "http://localhost:11434",
+        "ollama_mode": "hybrid",
+        "min_text_chars": 120,
+    },
     "zotero_storage_dir": None,
     "zotero": {
         "library_id": None,
@@ -131,6 +138,15 @@ def _generic_environment() -> Settings:
         ("BIBLIOGRAPH_DB", ("db",), str),
         ("BIBLIOGRAPH_PDF_DIR", ("pdf_dir",), str),
         ("BIBLIOGRAPH_COLLECTION", ("collection",), str),
+        ("BIBLIOGRAPH_PDF_EXTRACTION_PROVIDER", ("pdf_extraction", "provider"), str),
+        ("BIBLIOGRAPH_OLLAMA_OCR_MODEL", ("pdf_extraction", "ollama_model"), str),
+        ("BIBLIOGRAPH_OLLAMA_OCR_BASE_URL", ("pdf_extraction", "ollama_base_url"), str),
+        ("BIBLIOGRAPH_OLLAMA_OCR_MODE", ("pdf_extraction", "ollama_mode"), str),
+        (
+            "BIBLIOGRAPH_OLLAMA_OCR_MIN_TEXT_CHARS",
+            ("pdf_extraction", "min_text_chars"),
+            _as_int,
+        ),
         ("BIBLIOGRAPH_ZOTERO_STORAGE_DIR", ("zotero", "storage_dir"), str),
         ("BIBLIOGRAPH_ZOTERO_LIBRARY_ID", ("zotero", "library_id"), str),
         ("BIBLIOGRAPH_ZOTERO_LIBRARY_TYPE", ("zotero", "library_type"), str),
@@ -311,8 +327,30 @@ def _validate(settings: Mapping[str, Any]) -> None:
     acquisition = settings.get("acquisition")
     remote = settings.get("remote")
     classification = settings.get("classification")
+    pdf_extraction = settings.get("pdf_extraction")
     if not isinstance(embedding, Mapping) or not isinstance(llm, Mapping):
         raise ValueError("embedding and llm settings must be tables")
+    if not isinstance(pdf_extraction, Mapping):
+        raise ValueError("pdf_extraction settings must be a table")
+    if pdf_extraction.get("provider") not in {"pymupdf", "ollama"}:
+        raise ValueError("pdf_extraction.provider must be 'pymupdf' or 'ollama'")
+    if pdf_extraction.get("ollama_mode") not in {"hybrid", "all"}:
+        raise ValueError("pdf_extraction.ollama_mode must be 'hybrid' or 'all'")
+    if not isinstance(pdf_extraction.get("ollama_model"), str) or not pdf_extraction[
+        "ollama_model"
+    ].strip():
+        raise ValueError("pdf_extraction.ollama_model must be a non-empty model name")
+    if not isinstance(pdf_extraction.get("ollama_base_url"), str) or not pdf_extraction[
+        "ollama_base_url"
+    ].strip():
+        raise ValueError("pdf_extraction.ollama_base_url must be a non-empty URL")
+    min_text_chars = pdf_extraction.get("min_text_chars")
+    if (
+        not isinstance(min_text_chars, int)
+        or isinstance(min_text_chars, bool)
+        or min_text_chars < 1
+    ):
+        raise ValueError("pdf_extraction.min_text_chars must be a positive integer")
     _validate_provider(embedding, section="embedding", choices=embedding_names())
     _validate_provider(llm, section="llm", choices=chat_names())
     batch_size = embedding.get("batch_size")

@@ -75,48 +75,24 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
-local-embeddings = [
-    { name = "sentence-transformers" },
-]
-openai = [
-    { name = "openai" },
-]
-pdf = [
-    { name = "pymupdf" },
-]
-remote = [
-    { name = "doidownloader" },
-    { name = "playwright" },
-    { name = "pydoi" },
-]
-zotero = [
-    { name = "pyzotero" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "doidownloader", marker = "extra == 'all'", specifier = ">=0.1.0" },
-    { name = "doidownloader", marker = "extra == 'remote'", specifier = ">=0.1.0" },
     { name = "ikarus", editable = "../ikarus" },
     { name = "langgraph", specifier = ">=0.2" },
     { name = "openai", marker = "extra == 'all'", specifier = ">=1.40" },
-    { name = "openai", marker = "extra == 'openai'", specifier = ">=1.40" },
     { name = "playwright", marker = "extra == 'all'", specifier = ">=1.50" },
-    { name = "playwright", marker = "extra == 'remote'", specifier = ">=1.50" },
     { name = "pydoi", marker = "extra == 'all'", specifier = ">=0.2.1" },
-    { name = "pydoi", marker = "extra == 'remote'", specifier = ">=0.2.1" },
     { name = "pymupdf", marker = "extra == 'all'", specifier = ">=1.24" },
-    { name = "pymupdf", marker = "extra == 'pdf'", specifier = ">=1.24" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyzotero", marker = "extra == 'all'", specifier = ">=1.5" },
-    { name = "pyzotero", marker = "extra == 'zotero'", specifier = ">=1.5" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "sentence-transformers", marker = "extra == 'all'", specifier = ">=3.0" },
-    { name = "sentence-transformers", marker = "extra == 'local-embeddings'", specifier = ">=3.0" },
 ]
-provides-extras = ["pdf", "zotero", "local-embeddings", "openai", "remote", "all", "dev"]
+provides-extras = ["all", "dev"]
 
 [[package]]
 name = "bibtexparser"
@@ -581,12 +557,13 @@ requires-dist = [
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=0.2" },
     { name = "laya" },
     { name = "ollama", specifier = ">=0.6.3" },
+    { name = "openai", marker = "extra == 'mistral'", specifier = ">=1.40" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.40" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "sentence-transformers", marker = "extra == 'local-embeddings'", specifier = ">=3.0" },
     { name = "sqlite-vec" },
 ]
-provides-extras = ["langgraph", "openai", "local-embeddings"]
+provides-extras = ["langgraph", "openai", "mistral", "local-embeddings"]
 
 [[package]]
 name = "iniconfig"

@@ -28,7 +28,7 @@ from .adapters.ikarus import (
     is_ikarus_index,
     open_ikarus_staging,
 )
-from .adapters.pdf import extract_pages
+from .adapters.ollama_ocr import configured_page_extractor
 from .adapters.sqlite import SQLiteStore
 from .adapters.zotero import build_zotero, zotero_storage_dirs
 from .commands.check import check
@@ -80,6 +80,7 @@ def run_sync(
     strategies = _acquisition_strategies(settings, zotero)
     storage_dirs = zotero_storage_dirs(settings.get("zotero_storage_dir"))
     database = settings["db"]
+    page_extractor = configured_page_extractor(settings)
 
     if rebuild:
         with open_ikarus_staging(
@@ -93,7 +94,7 @@ def run_sync(
                 store=store,
                 zotero=zotero,
                 strategies=strategies,
-                extract_pages=extract_pages,
+                extract_pages=page_extractor,
                 storage_dirs=storage_dirs,
                 collection=collection,
                 rebuild=True,
@@ -113,7 +114,7 @@ def run_sync(
             store=store,
             zotero=zotero,
             strategies=strategies,
-            extract_pages=extract_pages,
+            extract_pages=page_extractor,
             storage_dirs=storage_dirs,
             collection=collection,
             rebuild=False,
@@ -133,6 +134,7 @@ def run_ingest_pdfs(
     embedding = build_embedding(settings)
     embedding["probe"]()
     classification = _paper_evidence_strategy(settings)
+    page_extractor = configured_page_extractor(settings)
     with IkarusBackend(
         settings["db"],
         mode="write",
@@ -143,7 +145,7 @@ def run_ingest_pdfs(
         return ingest_pdfs(
             directory,
             store=store,
-            extract_pages=extract_pages,
+            extract_pages=page_extractor,
             recursive=recursive,
             show_progress=show_progress,
             force_reindex=force_reindex,

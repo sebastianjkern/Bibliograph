@@ -15,23 +15,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-pdf = [
-    "PyMuPDF>=1.24",
-]
-zotero = [
-    "pyzotero>=1.5",
-]
-local-embeddings = [
-    "sentence-transformers>=3.0",
-]
-openai = [
-    "openai>=1.40",
-]
-remote = [
-    "doidownloader>=0.1.0",
-    "pyDOI>=0.2.1",
-    "playwright>=1.50",
-]
 all = [
     "PyMuPDF>=1.24",
     "pyzotero>=1.5",
