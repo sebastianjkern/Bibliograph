@@ -2,11 +2,15 @@
 
 import atexit
 import multiprocessing
+import operator
 from collections.abc import Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, TypedDict
+
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
 
 from rich.progress import (
     BarColumn,
@@ -26,6 +30,16 @@ from .progress import StageProgress
 
 _WORKER_BACKEND = None
 _WORKER_TOOLS: dict[str, Any] = {}
+
+
+class _DraftState(TypedDict):
+    claims: list[dict]
+    results: Annotated[dict[int, dict], operator.or_]
+
+
+class _DraftClaimTask(TypedDict):
+    claim_index: int
+    claim: dict
 
 
 def _close_check_worker() -> None:
@@ -116,29 +130,50 @@ def check(
                 stages=stages,
             )
         else:
-            results = []
-            for claim in claims:
+            def dispatch(state: _DraftState):
+                return [
+                    Send("check_claim", {"claim_index": index, "claim": claim})
+                    for index, claim in enumerate(state["claims"])
+                ]
+
+            def check_claim(task: _DraftClaimTask) -> dict:
+                index = task["claim_index"]
+
                 def update_progress(description: str) -> None:
                     if stages is not None:
-                        stages.update(f"[{len(results) + 1}/{len(claims)}] {description}")
+                        stages.update(f"[{index + 1}/{len(claims)}] {description}")
 
                 result = search_claim(
-                    claim,
+                    task["claim"],
                     backend=backend,
                     limit=limit,
                     min_score=min_score,
                     expand=llm_tools.get("expand"),
                     rerank=llm_tools.get("rerank"),
-                    progress=update_progress,
+                    progress=update_progress if stages is not None else None,
                     select_evidence=llm_tools.get("select_evidence"),
                     explain=llm_tools.get("explain"),
                     enrich=enrich,
                     top_only=True,
                 )
-                results.append(result)
                 if task_id is not None and progress is not None:
                     progress.advance(task_id)
                     progress.refresh()
+                return {"results": {index: result}}
+
+            graph = StateGraph(_DraftState)
+            graph.add_node("check_claim", check_claim)
+            graph.add_conditional_edges(START, dispatch)
+            graph.add_edge("check_claim", END)
+            graph_result = (
+                graph.compile().invoke(
+                    {"claims": claims, "results": {}},
+                    config={"max_concurrency": workers},
+                )
+                if claims
+                else {"results": {}}
+            )
+            results = [graph_result["results"][index] for index in range(len(claims))]
         for result in results:
             for item in result["items"]:
                 item["claim_synthesis"] = result.get("synthesis")

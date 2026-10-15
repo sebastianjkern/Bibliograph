@@ -598,7 +598,7 @@ dependencies = [
     { name = "laya" },
     { name = "ollama" },
     { name = "python-dotenv" },
-    { name = "sqlite-vec" },
+    { name = "vectorlite-py" },
 ]
 
 [package.metadata]
@@ -612,9 +612,10 @@ requires-dist = [
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.40" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "sentence-transformers", marker = "extra == 'local-embeddings'", specifier = ">=3.0" },
-    { name = "sqlite-vec" },
+    { name = "sqlite-vec", marker = "extra == 'sqlite-vec'" },
+    { name = "vectorlite-py", specifier = ">=0.2,<0.3" },
 ]
-provides-extras = ["langgraph", "openai", "mistral", "local-embeddings"]
+provides-extras = ["langgraph", "openai", "mistral", "local-embeddings", "sqlite-vec"]
 
 [[package]]
 name = "iniconfig"
@@ -2308,18 +2309,6 @@ wheels = [
 ]
 
 [[package]]
-name = "sqlite-vec"
-version = "0.1.9"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/68/85/9fad0045d8e7c8df3e0fa5a56c630e8e15ad6e5ca2e6106fceb666aa6638/sqlite_vec-0.1.9-py3-none-macosx_10_6_x86_64.whl", hash = "sha256:1b62a7f0a060d9475575d4e599bbf94a13d85af896bc1ce86ee80d1b5b48e5fb", size = 131171, upload-time = "2026-03-31T08:02:31.717Z" },
-    { url = "https://files.pythonhosted.org/packages/a4/3d/3677e0cd2f92e5ebc43cd29fbf565b75582bff1ccfa0b8327c7508e1084f/sqlite_vec-0.1.9-py3-none-macosx_11_0_arm64.whl", hash = "sha256:1d52e30513bae4cc9778ddbf6145610434081be4c3afe57cd877893bad9f6b6c", size = 165434, upload-time = "2026-03-31T08:02:32.712Z" },
-    { url = "https://files.pythonhosted.org/packages/00/d4/f2b936d3bdc38eadcbd2a87875815db36430fab0363182ba5d12cd8e0b51/sqlite_vec-0.1.9-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:4e921e592f24a5f9a18f590b6ddd530eb637e2d474e3b1972f9bbeb773aa3cb9", size = 160076, upload-time = "2026-03-31T08:02:33.796Z" },
-    { url = "https://files.pythonhosted.org/packages/6f/ad/6afd073b0f817b3e03f9e37ad626ae341805891f23c74b5292818f49ac63/sqlite_vec-0.1.9-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.manylinux1_x86_64.whl", hash = "sha256:1515727990b49e79bcaf75fdee2ffc7d461f8b66905013231251f1c8938e7786", size = 163388, upload-time = "2026-03-31T08:02:34.888Z" },
-    { url = "https://files.pythonhosted.org/packages/42/89/81b2907cda14e566b9bf215e2ad82fc9b349edf07d2010756ffdb902f328/sqlite_vec-0.1.9-py3-none-win_amd64.whl", hash = "sha256:4a28dc12fa4b53d7b1dced22da2488fade444e96b5d16fd2d698cd670675cf32", size = 292804, upload-time = "2026-03-31T08:02:36.035Z" },
-]
-
-[[package]]
 name = "sympy"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2609,6 +2598,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/97/a1/318e4bc7f04a505189233ec2409cce9e18cd5f52d06738a9e96f0eac3816/uuid_utils-0.17.1-cp314-cp314t-win32.whl", hash = "sha256:ce2fd8f8bc0026c0fc137cf5cce9de546ff9e0b4008be3eb21b5a06249eafec1", size = 171217, upload-time = "2026-09-08T11:29:20.984Z" },
     { url = "https://files.pythonhosted.org/packages/06/79/11811f97922be44ca900fc89e26b4dae173bd03ffd03672da7b28b023b29/uuid_utils-0.17.1-cp314-cp314t-win_amd64.whl", hash = "sha256:3dd5706a9874799013e82ac567425c535a0a4a7779c8551154915a4ba2fcb1c4", size = 177754, upload-time = "2026-09-08T11:29:22.227Z" },
     { url = "https://files.pythonhosted.org/packages/60/66/f56b2b497286f01ac2f6a1be8f825e871906d6aaf83dd4ad0cd7c8d54013/uuid_utils-0.17.1-cp314-cp314t-win_arm64.whl", hash = "sha256:a3cd9443d0a3b6f631e6352cb9d9c0a9b68d808d71250eb44e7b00265ec382f7", size = 174267, upload-time = "2026-09-08T11:29:23.447Z" },
+]
+
+[[package]]
+name = "vectorlite-py"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/04/87/c1e4f2b58abaeebbb3ea9ce92603697667a1c6e37820a2430f216988dc24/vectorlite_py-0.2.0-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:8b63fd706e9fbcb46e1d534b58b4ed5cced0f06f425a9bd8ab4fb4c724512b6f", size = 1111618, upload-time = "2024-08-19T14:33:43.115Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/32/cf510c80ddfb1158aebcc81e005228feea5956dd598aefeee649d09f17ec/vectorlite_py-0.2.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:6f048631f9a3afa214e293377a26b3b670a509c95a7c104e86f79c2223f788cb", size = 1054513, upload-time = "2024-08-19T14:33:46.13Z" },
+    { url = "https://files.pythonhosted.org/packages/02/83/11fa0987ac55dd2a2483345922a6decfc742cd0910488df6c522bbc327d7/vectorlite_py-0.2.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1b97cd8e7bc80bc5b0f99c05c073ae094e27a865c410578aa61996e277ae6846", size = 1495211, upload-time = "2024-08-19T14:33:47.345Z" },
+    { url = "https://files.pythonhosted.org/packages/89/54/89d9074235bfb627999b46a011b41079139700b06c073638b69d1c752f96/vectorlite_py-0.2.0-py3-none-win_amd64.whl", hash = "sha256:31e87095caac0751bfa906611fd5128edefd6051db9da4a4c021c20b54598436", size = 842768, upload-time = "2024-08-19T14:33:48.602Z" },
 ]
 
 [[package]]

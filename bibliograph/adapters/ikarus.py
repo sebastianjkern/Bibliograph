@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
@@ -11,12 +12,14 @@ from contextlib import contextmanager
 from functools import lru_cache
 from inspect import Parameter, signature
 from pathlib import Path
+from threading import RLock
 from typing import Any
+from uuid import uuid4
 
 from adapters.providers.filesystems.fsspec import LocalFilesystem
 from adapters.providers.graph_stores import SQLiteGraphStore
 from adapters.providers.lexical_indexes import SQLiteFTSIndex
-from adapters.providers.vector_stores import sqlite_vec
+from adapters.providers.vector_stores import sqlite_vec, vectorlite
 from core.knowledge.graph import DocumentRecord, GraphEdge, GraphNode, PersonalizedPageRankExpansion
 from core.knowledge.index_manifest import IndexManifest
 from core.knowledge.ingest import DocumentGraph
@@ -32,6 +35,15 @@ from ..pipeline.classification import PROFILE_VERSION
 from ..pipeline.indexing import INDEXING_FINGERPRINT
 from ..pipeline.timing import TimingRecorder
 from .context import join_chunk_context
+
+_vector_store = (
+    sqlite_vec
+    if os.environ.get("IKARUS_VECTOR_STORE", "vectorlite").lower() == "sqlite_vec"
+    else vectorlite
+)
+_VECTOR_METADATA_TABLE = (
+    "vector_metadata" if _vector_store is sqlite_vec else "vectorlite_metadata"
+)
 
 INDEX_SCHEMA_VERSION = 1
 
@@ -146,18 +158,21 @@ class IkarusIndexError(RuntimeError):
     """An Ikarus-backed Bibliograph index is absent or incompatible."""
 
 
-def _configure_vectors(path: Path) -> None:
-    if sqlite_vec._connection is not None:
-        sqlite_vec._connection.close()
-        sqlite_vec._connection = None
-    sqlite_vec._DATABASE = str(path)
+def _configure_vectors(path: Path, index_namespace: str | None = None) -> None:
+    if _vector_store is vectorlite:
+        vectorlite.set_database(path, index_namespace)
+    else:
+        if _vector_store._connection is not None:
+            _vector_store._connection.close()
+            _vector_store._connection = None
+        _vector_store._DATABASE = str(path)
     configure_vector_store(
-        sqlite_vec.add,
-        sqlite_vec.delete,
-        sqlite_vec.clear,
-        sqlite_vec.query,
-        sqlite_vec.get_metadata,
-        sqlite_vec.delete_document,
+        _vector_store.add,
+        _vector_store.delete,
+        _vector_store.clear,
+        _vector_store.query,
+        _vector_store.get_metadata,
+        _vector_store.delete_document,
     )
 
 
@@ -172,6 +187,7 @@ class IkarusBackend:
         mode: str = "read",
         ingestion_strategy: Callable[[str], dict[str, Any]] | None = None,
         classification_enabled: bool = False,
+        vector_index_namespace: str | None = None,
     ) -> None:
         if mode not in {"read", "write"}:
             raise ValueError("mode must be 'read' or 'write'")
@@ -198,11 +214,12 @@ class IkarusBackend:
         self._assert_index_kind(create=mode == "write")
         if mode == "write" and not self.path.exists():
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        _configure_vectors(self.path)
+        _configure_vectors(self.path, vector_index_namespace)
         graph = SQLiteGraphStore(self.path)
         self.graph = _ReadCachedGraphStore(graph) if mode == "read" else graph
         self.lexical = SQLiteFTSIndex(self.path)
-        self.connection = sqlite3.connect(str(self.path))
+        self.connection = sqlite3.connect(str(self.path), check_same_thread=False)
+        self._connection_lock = RLock()
         self.connection.row_factory = sqlite3.Row
         self.manifests = None
         try:
@@ -264,9 +281,9 @@ class IkarusBackend:
         if getattr(self, "graph", None) is not None:
             self.graph.close()
             self.graph = None
-        if sqlite_vec._connection is not None:
-            sqlite_vec._connection.close()
-            sqlite_vec._connection = None
+        if _vector_store._connection is not None:
+            _vector_store._connection.close()
+            _vector_store._connection = None
 
     def workflow_cache(self):
         """Return persistent workflow caches beside this index, created on first use."""
@@ -387,6 +404,39 @@ class IkarusBackend:
             "path": str(document.path),
         }
 
+    def repair_missing_vectors(self, *, batch_size: int = 32) -> int:
+        """Re-embed graph chunks missing vectors inside the current staged database."""
+        self._require_write()
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        rows = self.connection.execute(
+            f"SELECT nodes.identifier, nodes.document_id, nodes.content, nodes.metadata "
+            "FROM graph_nodes AS nodes "
+            f"LEFT JOIN {_VECTOR_METADATA_TABLE} AS vectors "
+            "ON vectors.identifier=nodes.identifier "
+            "WHERE nodes.kind='chunk' AND vectors.identifier IS NULL "
+            "ORDER BY nodes.document_id, nodes.identifier"
+        ).fetchall()
+        embed_many = self.embedding.get("embed_documents")
+        if rows and embed_many is None:
+            raise IkarusIndexError("The configured embedding provider cannot repair missing vectors.")
+        repaired = 0
+        for start in range(0, len(rows), batch_size):
+            batch = rows[start : start + batch_size]
+            texts = [str(row["content"]) for row in batch]
+            vectors = embed_many(texts)
+            if len(vectors) != len(batch):
+                raise IkarusIndexError("Embedding provider returned an incomplete repair batch.")
+            for row, vector in zip(batch, vectors, strict=True):
+                if len(vector) != self.embedding_dimension:
+                    raise IkarusIndexError("Embedding dimension changed while repairing the index.")
+                metadata = json.loads(row["metadata"] or "{}")
+                metadata.update({"document_id": row["document_id"], "text": row["content"]})
+                _vector_store.add(row["identifier"], vector, metadata)
+                repaired += 1
+        return repaired
+
+
     def index_pdf(
         self,
         paper: Paper,
@@ -478,10 +528,10 @@ class IkarusBackend:
         def search_vectors(vector: list[float], k: int, filters):
             report(f"Vector search · top {k}")
             if timings is None:
-                hits = sqlite_vec.query(vector, k, filters)
+                hits = _vector_store.query(vector, k, filters)
             else:
                 with timings.measure("vector_search"):
-                    hits = sqlite_vec.query(vector, k, filters)
+                    hits = _vector_store.query(vector, k, filters)
             report(f"Vector search complete · {len(hits)} candidates")
             return hits
 
@@ -511,9 +561,9 @@ class IkarusBackend:
             vector_query=(
                 search_vectors
                 if (progress is not None or timings is not None)
-                else sqlite_vec.query
+                else _vector_store.query
             ),
-            metadata_reader=sqlite_vec.get_metadata,
+            metadata_reader=_vector_store.get_metadata,
             lexical_index=self.lexical,
             lexical_query=(
                 search_lexically if (progress is not None or timings is not None) else None
@@ -532,10 +582,11 @@ class IkarusBackend:
         for result in results:
             metadata = dict(result.metadata or {})
             if "kind" not in metadata:
-                row = self.connection.execute(
-                    "SELECT kind FROM graph_nodes WHERE identifier=?",
-                    (result.identifier,),
-                ).fetchone()
+                with self._connection_lock:
+                    row = self.connection.execute(
+                        "SELECT kind FROM graph_nodes WHERE identifier=?",
+                        (result.identifier,),
+                    ).fetchone()
                 if row is not None:
                     metadata["kind"] = row[0]
             if metadata.get("kind") != "chunk":
@@ -686,7 +737,13 @@ class IkarusBackend:
             "papers": count("SELECT COUNT(*) FROM graph_nodes WHERE kind='paper'"),
             "documents": count("SELECT COUNT(*) FROM bibliograph_sources WHERE state IN ('indexed','empty')"),
             "chunks": count("SELECT COUNT(*) FROM graph_nodes WHERE kind='chunk'"),
-            "vectors": count("SELECT COUNT(*) FROM vector_metadata"),
+            "vectors": count(f"SELECT COUNT(*) FROM {_VECTOR_METADATA_TABLE}"),
+            "missing_vectors": count(
+                f"SELECT COUNT(*) FROM graph_nodes AS nodes "
+                f"LEFT JOIN {_VECTOR_METADATA_TABLE} AS vectors "
+                "ON vectors.identifier=nodes.identifier "
+                "WHERE nodes.kind='chunk' AND vectors.identifier IS NULL"
+            ),
             "embedding_id": self.embedding_id,
             "dimension": self.embedding_dimension,
             "extraction_chunking_fingerprint": INDEXING_FINGERPRINT,
@@ -738,7 +795,7 @@ class IkarusBackend:
         self.connection.commit()
 
     def _delete_document(self, source_key: str) -> None:
-        sqlite_vec.delete_document(source_key)
+        _vector_store.delete_document(source_key)
         self.graph.delete_document(source_key)
         self.lexical.delete_document(source_key)
 
@@ -893,7 +950,13 @@ def inspect_ikarus_index(path: str | Path) -> dict[str, Any]:
             "papers": count("SELECT COUNT(*) FROM graph_nodes WHERE kind='paper'"),
             "documents": count("SELECT COUNT(*) FROM bibliograph_sources WHERE state IN ('indexed','empty')"),
             "chunks": count("SELECT COUNT(*) FROM graph_nodes WHERE kind='chunk'"),
-            "vectors": count("SELECT COUNT(*) FROM vector_metadata"),
+            "vectors": count(f"SELECT COUNT(*) FROM {_VECTOR_METADATA_TABLE}"),
+            "missing_vectors": count(
+                f"SELECT COUNT(*) FROM graph_nodes AS nodes "
+                f"LEFT JOIN {_VECTOR_METADATA_TABLE} AS vectors "
+                "ON vectors.identifier=nodes.identifier "
+                "WHERE nodes.kind='chunk' AND vectors.identifier IS NULL"
+            ),
             "embedding_id": manifest["embedding_id"],
             "dimension": int(manifest["embedding_dimension"]),
             "extraction_chunking_fingerprint": manifest["ingestion_fingerprint"],
@@ -905,6 +968,104 @@ def inspect_ikarus_index(path: str | Path) -> dict[str, Any]:
         connection.close()
 
 
+def _can_seed_ikarus_index(path: str | Path, embedding_id: str | None = None) -> bool:
+    """Return whether graph content can seed an atomic sync generation."""
+    database = Path(path)
+    if not is_ikarus_index(database):
+        return False
+    connection = None
+    try:
+        connection = sqlite3.connect(f"file:{database.resolve()}?mode=ro", uri=True)
+        meta = connection.execute(
+            "SELECT embedding_id FROM bibliograph_index_meta WHERE singleton=1"
+        ).fetchone()
+        if meta is None or (embedding_id is not None and meta[0] != embedding_id):
+            return False
+        graph_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='graph_nodes'"
+        ).fetchone()
+        return graph_table is not None
+    except sqlite3.Error:
+        return False
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _seed_staging_database(
+    source: Path, staging: Path, index_namespace: str | None
+) -> None:
+    """Clone a complete index and give its Vectorlite files a private generation path."""
+    source_connection = sqlite3.connect(f"file:{source.resolve()}?mode=ro", uri=True)
+    staging_connection = sqlite3.connect(staging)
+    try:
+        source_connection.backup(staging_connection)
+        if index_namespace is None:
+            return
+        tables = {
+            row[0]
+            for row in staging_connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if "vectorlite_metadata" not in tables:
+            return
+        config = staging_connection.execute(
+            "SELECT value FROM vectorlite_config WHERE key='index_namespace'"
+        ).fetchone() if "vectorlite_config" in tables else None
+        old_namespace = config[0] if config else None
+        dimensions = [
+            int(row[0]) for row in staging_connection.execute(
+                "SELECT DISTINCT dimension FROM vectorlite_metadata"
+            )
+        ]
+        for dimension in dimensions:
+            table = f"vectorlite_vec_{dimension}"
+            declaration_row = staging_connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            if declaration_row is None:
+                raise IkarusIndexError(
+                    f"Vectorlite table for dimension {dimension} is missing; rebuild the index."
+                )
+            old_path = (
+                Path(f"{old_namespace}.vectorlite-{dimension}.hnsw")
+                if old_namespace
+                else source.with_name(f"{source.name}.vectorlite-{dimension}.hnsw")
+            )
+            new_path = Path(f"{index_namespace}.vectorlite-{dimension}.hnsw")
+            old_sql_path = str(old_path).replace("'", "''")
+            new_sql_path = str(new_path).replace("'", "''")
+            declaration = declaration_row[0] or ""
+            if not old_path.is_file() or old_sql_path not in declaration:
+                # The staged adapter will discard this unusable HNSW table and
+                # re-embed its graph chunks from the copied SQLite generation.
+                continue
+            new_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(old_path, new_path)
+            staging_connection.execute("PRAGMA writable_schema=ON")
+            staging_connection.execute(
+                "UPDATE sqlite_master SET sql=? WHERE type='table' AND name=?",
+                (declaration.replace(old_sql_path, new_sql_path), table),
+            )
+            staging_connection.execute("PRAGMA writable_schema=OFF")
+        if "vectorlite_config" in tables:
+            staging_connection.execute(
+                "INSERT INTO vectorlite_config(key, value) VALUES ('index_namespace', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (index_namespace,),
+            )
+        staging_connection.execute(
+            "PRAGMA schema_version="
+            + str(staging_connection.execute("PRAGMA schema_version").fetchone()[0] + 1)
+        )
+        staging_connection.commit()
+    finally:
+        staging_connection.close()
+        source_connection.close()
+
+
 @contextmanager
 def open_ikarus_staging(
     path: str | Path,
@@ -912,30 +1073,91 @@ def open_ikarus_staging(
     embedding: Mapping[str, Any],
     ingestion_strategy: Callable[[str], dict[str, Any]] | None = None,
     classification_enabled: bool = False,
+    seed_existing: bool = False,
 ):
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     descriptor, name = tempfile.mkstemp(prefix=f".{target.name}.ikarus-staging-", dir=target.parent)
     os.close(descriptor)
     staging = Path(name)
+    index_namespace = (
+        str(target.parent.resolve() / f".{target.name}.generation-{uuid4().hex}")
+        if _vector_store is vectorlite
+        else None
+    )
     backend = None
+    published = False
     try:
+        if seed_existing:
+            _seed_staging_database(target, staging, index_namespace)
         backend = IkarusBackend(
             staging,
             embedding=embedding,
             mode="write",
             ingestion_strategy=ingestion_strategy,
             classification_enabled=classification_enabled,
+            vector_index_namespace=index_namespace,
         )
         yield backend
         summary = backend.stats()
         backend.close()
         backend = None
-        if not all(summary[field] > 0 for field in ("documents", "chunks", "vectors")):
-            raise IkarusIndexError("Refusing to replace the active index with an incomplete staged index.")
+        if (
+            not all(summary[field] > 0 for field in ("documents", "chunks", "vectors"))
+            or summary.get("missing_vectors", 0)
+        ):
+            raise IkarusIndexError(
+                "Refusing to publish an incomplete staged index: every chunk must have a vector."
+            )
+        if _vector_store is vectorlite:
+            staged_connection = sqlite3.connect(
+                f"file:{staging.resolve()}?mode=ro", uri=True
+            )
+            try:
+                dimensions = [
+                    int(row[0]) for row in staged_connection.execute(
+                        "SELECT DISTINCT dimension FROM vectorlite_metadata"
+                    )
+                ]
+            finally:
+                staged_connection.close()
+            missing_sidecars = [
+                str(Path(f"{index_namespace}.vectorlite-{dimension}.hnsw"))
+                for dimension in dimensions
+                if not Path(f"{index_namespace}.vectorlite-{dimension}.hnsw").is_file()
+            ]
+            if missing_sidecars:
+                raise IkarusIndexError(
+                    "Refusing to publish an index with missing Vectorlite sidecars: "
+                    + ", ".join(missing_sidecars)
+                )
         os.replace(staging, target)
+        published = True
     finally:
         if backend is not None:
             backend.close()
         for candidate in (staging, Path(f"{staging}-wal"), Path(f"{staging}-shm")):
             candidate.unlink(missing_ok=True)
+        # A KeyboardInterrupt can land after os.replace() but before the flag
+        # assignment. Keep the generation if the published DB already points
+        # at it; otherwise cleanup would leave a valid DB with a missing HNSW.
+        target_uses_generation = False
+        if index_namespace is not None and not published and target.is_file():
+            try:
+                published_connection = sqlite3.connect(
+                    f"file:{target.resolve()}?mode=ro", uri=True
+                )
+                try:
+                    namespace_row = published_connection.execute(
+                        "SELECT value FROM vectorlite_config WHERE key='index_namespace'"
+                    ).fetchone()
+                    target_uses_generation = (
+                        namespace_row is not None and namespace_row[0] == index_namespace
+                    )
+                finally:
+                    published_connection.close()
+            except sqlite3.Error:
+                pass
+        if index_namespace is not None and not published and not target_uses_generation:
+            for sidecar in target.parent.glob(Path(index_namespace).name + ".vectorlite-*.hnsw"):
+                sidecar.unlink(missing_ok=True)

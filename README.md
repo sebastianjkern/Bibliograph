@@ -200,3 +200,5 @@ bibliograph/
 ```
 
 Provider runtimes are constructed through Ikarus's `adapters.providers.model_runtimes` registry; command and pipeline code should not branch on provider names. Always verify retrieved evidence before inserting a citation into a manuscript.
+
+Ikarus-backed syncs are applied to a sibling staging database and a generation-specific Vectorlite sidecar. Bibliograph publishes the SQLite database only after it closes the HNSW index and verifies that every stored chunk has a vector. If a prior index is incomplete but its graph content is available, sync re-embeds missing chunks in the staged generation; a failed sync leaves the active generation in place.

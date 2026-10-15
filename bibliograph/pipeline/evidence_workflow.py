@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import operator
 import re
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from inspect import signature
-from typing import Any, TypedDict, cast
+from threading import Event, Lock
+from typing import Annotated, Any, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
 
 from ..domain import Claim, ScoredChunk, citation_label
 from ..knowledge import QueryRequest
@@ -79,6 +83,48 @@ class EvidenceState(TypedDict):
     result: dict
 
 
+class _RetrievalBatchState(TypedDict):
+    tasks: list[dict[str, Any]]
+    results: Annotated[dict[int, dict[str, Any]], operator.or_]
+
+
+class _RetrievalTask(TypedDict):
+    index: int
+    query: str
+    query_vector: Sequence[float] | None
+
+
+class _AssessmentBatchState(TypedDict):
+    tasks: list[dict[str, Any]]
+    results: Annotated[dict[str, dict[str, object]], operator.or_]
+    cache_hits: Annotated[list[bool], operator.add]
+
+
+class _AssessmentTask(TypedDict):
+    claim: str
+    index: int
+    total: int
+    hit: ScoredChunk
+    context: str
+    components: Sequence[str]
+    phase_name: str
+    on_complete: Callable[[], None]
+
+
+class _RerankBatchState(TypedDict):
+    tasks: list[dict[str, Any]]
+    results: Annotated[dict[int, list[ScoredChunk]], operator.or_]
+    cacheable: Annotated[dict[int, bool], operator.or_]
+
+
+class _RerankTask(TypedDict):
+    claim: str
+    index: int
+    total: int
+    hits: list[ScoredChunk]
+    on_complete: Callable[[int], None]
+
+
 def build_evidence_workflow(
     *,
     backend,
@@ -95,11 +141,17 @@ def build_evidence_workflow(
     one_per_paper: bool,
     max_refinements: int = 1,
     max_context_extensions: int = 1,
+    assessment_workers: int = 4,
+    rerank_workers: int = 4,
     timings: TimingRecorder | None = None,
 ):
     """Build a bounded retrieve-context-assess-refine LangGraph workflow."""
     if max_refinements < 0 or max_context_extensions < 0:
         raise ValueError("workflow iteration limits cannot be negative")
+    if assessment_workers < 1:
+        raise ValueError("assessment_workers must be positive")
+    if rerank_workers < 1:
+        raise ValueError("rerank_workers must be positive")
 
     context_lookup = _context_lookup(backend)
     retrieve_request = getattr(backend, "retrieve_request", None)
@@ -117,10 +169,140 @@ def build_evidence_workflow(
         else None
     )
     assessment_pass = 0
+    assessment_provider_failed = Event()
+
+    def retrieve_query(task: _RetrievalTask) -> dict:
+        query = task["query"]
+        if retrieve_request is not None:
+            retrieve_kwargs = {
+                "limit": initial_retrieval_limit(limit),
+                "include_trace": True,
+            }
+            if timings is not None and _accepts_keyword(retrieve_request, "timings"):
+                retrieve_kwargs["timings"] = timings
+            if task.get("query_vector") is not None:
+                retrieve_kwargs["query_vector"] = task["query_vector"]
+            engine_result = retrieve_request(
+                QueryRequest.from_alternatives(query), **retrieve_kwargs
+            )
+            result = {
+                "hits": list(engine_result.hits),
+                "details": engine_result.score_details,
+                "trace": engine_result.trace,
+            }
+        else:
+            hits, details = backend.retrieve(
+                query,
+                alternatives=(),
+                limit=initial_retrieval_limit(limit),
+            )
+            result = {"hits": hits, "details": details, "trace": None}
+        return {"results": {task["index"]: result}}
+
+    def dispatch_retrieval(state: _RetrievalBatchState):
+        return [Send("retrieve_query", task) for task in state["tasks"]]
+
+    retrieval_graph = StateGraph(_RetrievalBatchState)
+    retrieval_graph.add_node("retrieve_query", retrieve_query)
+    retrieval_graph.add_conditional_edges(START, dispatch_retrieval)
+    retrieval_graph.add_edge("retrieve_query", END)
+    retrieval_graph = retrieval_graph.compile()
 
     def report(message: str) -> None:
         if progress is not None:
             progress(message)
+
+    def assess_passage(task: _AssessmentTask) -> dict:
+        hit = task["hit"]
+        chunk, _score = hit
+        key = None
+        cache_identity = getattr(select_evidence, "assessment_cache_identity", None)
+        if workflow_cache is not None and cache_identity:
+            key = assessment_cache_key(
+                {
+                    "identity": cache_identity,
+                    "claim": task["claim"],
+                    "chunk_id": chunk.chunk_id,
+                    "citation": citation_label(chunk.paper),
+                    "page": chunk.page,
+                    "evidence_role": chunk.evidence_role,
+                    "content_kind": chunk.content_kind,
+                    "context": task["context"],
+                    "components": list(task["components"]),
+                }
+            )
+            cached = workflow_cache.get(key)
+            if cached is not None:
+                task["on_complete"]()
+                return {"results": {chunk.chunk_id: cached}, "cache_hits": [True]}
+
+        if assessment_provider_failed.is_set():
+            return {
+                "results": {chunk.chunk_id: _unavailable_assessment()},
+                "cache_hits": [False],
+            }
+
+        kwargs = (
+            {"components": task["components"]}
+            if task["components"] and _accepts_keyword(select_evidence, "components")
+            else {}
+        )
+        if timings is None:
+            selected = select_evidence(
+                task["claim"], hit, task["context"], **kwargs
+            )
+        else:
+            with timings.measure("evidence_assessment"):
+                selected = select_evidence(
+                    task["claim"], hit, task["context"], **kwargs
+                )
+        cacheable = not (
+            isinstance(selected, dict)
+            and selected.get("__cacheable__", True) is False
+        )
+        if isinstance(selected, dict) and "__cacheable__" in selected:
+            selected = {
+                name: value
+                for name, value in selected.items()
+                if name != "__cacheable__"
+            }
+        assessment = _normalise_assessment(selected, task["context"])
+        if assessment.get("relation") == "unavailable":
+            assessment_provider_failed.set()
+        if key is not None and cacheable:
+            workflow_cache.set(key, assessment)
+        task["on_complete"]()
+        return {"results": {chunk.chunk_id: assessment}, "cache_hits": [False]}
+
+    def dispatch_assessments(state: _AssessmentBatchState):
+        return [Send("assess_passage", task) for task in state["tasks"]]
+
+    assessment_graph = StateGraph(_AssessmentBatchState)
+    assessment_graph.add_node("assess_passage", assess_passage)
+    assessment_graph.add_conditional_edges(START, dispatch_assessments)
+    assessment_graph.add_edge("assess_passage", END)
+    assessment_graph = assessment_graph.compile()
+
+    def rerank_batch(task: _RerankTask) -> dict:
+        ranked_batch = _run_reranker(
+            rerank, task["claim"], task["hits"], None
+        )
+        task["on_complete"](len(task["hits"]))
+        return {
+            "results": {task["index"]: ranked_batch},
+            "cacheable": {
+                task["index"]: getattr(ranked_batch, "cacheable", True) is not False
+            },
+        }
+
+    def dispatch_reranking(state: _RerankBatchState):
+        return [Send("rerank_batch", task) for task in state["tasks"]]
+
+    reranking_graph = StateGraph(_RerankBatchState)
+    reranking_graph.add_node("rerank_batch", rerank_batch)
+    reranking_graph.add_conditional_edges(START, dispatch_reranking)
+    reranking_graph.add_edge("rerank_batch", END)
+    reranking_graph = reranking_graph.compile()
 
     def plan(state: EvidenceState) -> dict:
         claim_text = state["claim"]["text"].strip()
@@ -183,30 +365,25 @@ def build_evidence_workflow(
             if retrieval_kind == "initial"
             else "Phase 4/5 · Retrieve follow-up evidence"
         )
-        for index, query in enumerate(pending, start=1):
-            report(f"Retrieving evidence · {index}/{len(pending)} queries")
-            if retrieve_request is not None:
-                retrieve_kwargs = {
-                    "limit": initial_retrieval_limit(limit),
-                    "include_trace": True,
-                }
-                if timings is not None and _accepts_keyword(retrieve_request, "timings"):
-                    retrieve_kwargs["timings"] = timings
-                if query in query_vectors:
-                    retrieve_kwargs["query_vector"] = query_vectors[query]
-                engine_result = retrieve_request(
-                    QueryRequest.from_alternatives(query), **retrieve_kwargs
-                )
-                hits = list(engine_result.hits)
-                details = engine_result.score_details
-                trace = engine_result.trace
-            else:
-                hits, details = backend.retrieve(
-                    query,
-                    alternatives=(),
-                    limit=initial_retrieval_limit(limit),
-                )
-                trace = None
+        batch_result = retrieval_graph.invoke(
+            {
+                "tasks": [
+                    {
+                        "index": index,
+                        "query": query,
+                        "query_vector": query_vectors.get(query),
+                    }
+                    for index, query in enumerate(pending)
+                ],
+                "results": {},
+            }
+        )
+        for index, query in enumerate(pending):
+            report(f"Retrieving evidence · {index + 1}/{len(pending)} queries")
+            query_result = batch_result["results"][index]
+            hits = query_result["hits"]
+            details = query_result["details"]
+            trace = query_result["trace"]
             query_traces.append({"query": query, "trace": trace})
             for chunk, score in hits:
                 if score < min_score:
@@ -215,7 +392,9 @@ def build_evidence_workflow(
                 previous = candidates.get(identifier)
                 if previous is None or score > previous[1]:
                     candidates[identifier] = (chunk, score)
-                candidate_queries.setdefault(identifier, []).append(query)
+                queries_for_candidate = candidate_queries.setdefault(identifier, [])
+                if query not in queries_for_candidate:
+                    queries_for_candidate.append(query)
                 if identifier in details:
                     score_details[identifier] = dict(details[identifier])
         new_count = len(set(candidates) - existing_ids)
@@ -248,7 +427,15 @@ def build_evidence_workflow(
     def assess(state: EvidenceState) -> dict:
         nonlocal assessment_pass
         assessment_pass += 1
-        candidates = list(state["candidates"].values())
+        # Retrieval branches may return the same chunk for several queries. Keep
+        # one candidate per stable chunk id before starting any model work.
+        candidates_by_id: dict[str, ScoredChunk] = {}
+        for hit in state["candidates"].values():
+            identifier = hit[0].chunk_id
+            previous = candidates_by_id.get(identifier)
+            if previous is None or hit[1] > previous[1]:
+                candidates_by_id[identifier] = hit
+        candidates = list(candidates_by_id.values())
         rerank_identity = getattr(rerank, "rerank_cache_identity", None)
         rerank_key = None
         candidate_by_id = {hit[0].chunk_id: hit for hit in candidates}
@@ -276,6 +463,7 @@ def build_evidence_workflow(
             workflow_cache.get_reranking(rerank_key) if rerank_key is not None else None
         )
         ranked = None
+        rerank_cacheable = True
         if cached_ranking is not None:
             try:
                 if len(cached_ranking) == len(candidate_by_id) and {
@@ -287,25 +475,218 @@ def build_evidence_workflow(
                     ]
             except (KeyError, TypeError, ValueError):
                 ranked = None
+        rerank_batches: list[list[ScoredChunk]] = []
         if ranked is not None:
             report(f"Reranking · reused cached order for {len(ranked)} passages")
         else:
-            if timings is None:
-                ranked = (
-                    _run_reranker(rerank, state["claim"]["text"], candidates, progress)
-                    if rerank is not None
-                    else sorted(candidates, key=lambda hit: hit[1], reverse=True)
+            if rerank is None:
+                ranked = sorted(candidates, key=lambda hit: hit[1], reverse=True)
+            elif candidates:
+                batch_size = 10
+                rerank_batches = [
+                    candidates[start : start + batch_size]
+                    for start in range(0, len(candidates), batch_size)
+                ]
+
+                def run_reranking_graph():
+                    completed_passages = 0
+                    completion_lock = Lock()
+
+                    def passage_batch_completed(count: int) -> None:
+                        nonlocal completed_passages
+                        with completion_lock:
+                            completed_passages += count
+                            report(
+                                f"Reranking passages · {completed_passages}/"
+                                f"{len(candidates)} complete"
+                            )
+
+                    def execute():
+                        report(
+                            f"Reranking {len(candidates)} passages in "
+                            f"{len(rerank_batches)} batches"
+                        )
+                        mapped = reranking_graph.invoke(
+                            {
+                                "tasks": [
+                                    {
+                                        "claim": state["claim"]["text"],
+                                        "index": index,
+                                        "total": len(rerank_batches),
+                                        "hits": batch,
+                                        "on_complete": passage_batch_completed,
+                                    }
+                                    for index, batch in enumerate(rerank_batches, start=1)
+                                ],
+                                "results": {},
+                                "cacheable": {},
+                            },
+                            config={"max_concurrency": rerank_workers},
+                        )
+                        merged = [
+                            hit
+                            for index in range(1, len(rerank_batches) + 1)
+                            for hit in mapped["results"][index]
+                        ]
+                        return (
+                            sorted(merged, key=lambda hit: hit[1], reverse=True),
+                            all(mapped["cacheable"].values()),
+                        )
+
+                    if timings is None:
+                        return execute()
+                    with timings.measure("reranking"):
+                        return execute()
+            else:
+                ranked = []
+        assessment_results = dict(state.get("assessment_results", {}))
+        contexts = dict(state.get("contexts", {}))
+        context_windows = dict(state.get("context_windows", {}))
+        if select_evidence is not None:
+            finalist_count = max(5, limit * 2)
+            old_assessments = {
+                identifier: _assessment_classification_signature(value)
+                for identifier, value in assessment_results.items()
+                if value is not None
+            }
+            component_names = _component_names(assessment_results)
+            phase_name = "Assess" if assessment_pass == 1 else "Review"
+            provisional = sorted(candidates, key=lambda hit: hit[1], reverse=True)[
+                :finalist_count
+            ]
+            if assessment_pass == 1:
+                report(
+                    f"Phase 3/5 · Assess evidence · up to {finalist_count} candidate passages"
                 )
             else:
-                with timings.measure("reranking"):
-                    ranked = (
-                        _run_reranker(rerank, state["claim"]["text"], candidates, progress)
-                        if rerank is not None
-                        else sorted(candidates, key=lambda hit: hit[1], reverse=True)
+                report(f"Review assessments · up to {finalist_count} candidate passages")
+
+            def prepare(hits: Sequence[ScoredChunk]) -> list[tuple[int, ScoredChunk, str]]:
+                prepared: list[tuple[int, ScoredChunk, str]] = []
+                for index, hit in enumerate(hits, start=1):
+                    chunk, _score = hit
+                    if chunk.chunk_id not in contexts:
+                        context = context_lookup(chunk)
+                        contexts[chunk.chunk_id] = (
+                            context
+                            if isinstance(context, str) and context.strip()
+                            else chunk.text
+                        )
+                        context_windows.setdefault(chunk.chunk_id, 1)
+                    prepared.append((index, hit, contexts[chunk.chunk_id]))
+                return prepared
+
+            def assess_many(
+                tasks: Sequence[tuple[int, ScoredChunk, str]],
+                shared_components: Sequence[str],
+            ) -> tuple[dict[str, dict[str, object]], list[bool]]:
+                if not tasks:
+                    return {}, []
+                batch_result = assessment_graph.invoke(
+                    {
+                        "tasks": [
+                            {
+                                "claim": state["claim"]["text"],
+                                "index": index,
+                                "total": len(tasks),
+                                "hit": hit,
+                                "context": context,
+                                "components": shared_components,
+                                "phase_name": phase_name,
+                                "on_complete": assessment_completed,
+                            }
+                            for index, hit, context in tasks
+                        ],
+                        "results": {},
+                        "cache_hits": [],
+                    },
+                    config={"max_concurrency": assessment_workers},
+                )
+                return batch_result["results"], batch_result["cache_hits"]
+
+            completed_assessments = 0
+            assessment_completion_lock = Lock()
+
+            def assessment_completed() -> None:
+                nonlocal completed_assessments
+                with assessment_completion_lock:
+                    completed_assessments += 1
+                    report(
+                        f"{phase_name} progress · "
+                        f"{completed_assessments} passages complete"
                     )
+
+            provisional_prepared = prepare(provisional)
+            prepared_results: dict[str, dict[str, object]] = {}
+            cache_hits: list[bool] = []
+            remaining = provisional_prepared
+            if not component_names and remaining:
+                # Establish shared claim components before fanning out assessments.
+                index, hit, context = remaining[0]
+                first = assess_passage(
+                    {
+                        "claim": state["claim"]["text"],
+                        "index": index,
+                        "total": len(provisional_prepared),
+                        "hit": hit,
+                        "context": context,
+                        "components": (),
+                        "phase_name": phase_name,
+                        "on_complete": assessment_completed,
+                    }
+                )
+                prepared_results.update(first["results"])
+                cache_hits.extend(first["cache_hits"])
+                component_names = _component_names(first["results"])
+                remaining = remaining[1:]
+
+            assessment_unavailable = any(
+                value.get("relation") == "unavailable"
+                for value in prepared_results.values()
+            )
+
+            # Assessment of likely finalists and reranking are independent once
+            # the component schema is known. Start both branches together. If a
+            # later rerank promotes a different passage, assess that remainder
+            # below before returning the graph state.
+            if ranked is None and callable(rerank) and assessment_unavailable:
+                # The first assessment can act as a circuit breaker: don't send
+                # more requests to a provider that just failed, but still finish
+                # reranking so retrieved evidence can be returned in order.
+                ranked, rerank_cacheable = run_reranking_graph()
+            elif ranked is None and callable(rerank):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    rank_future = executor.submit(run_reranking_graph)
+                    assess_future = executor.submit(assess_many, remaining, component_names)
+                    ranked, rerank_cacheable = rank_future.result()
+                    more_results, more_cache_hits = assess_future.result()
+                prepared_results.update(more_results)
+                cache_hits.extend(more_cache_hits)
+                assessment_unavailable = any(
+                    value.get("relation") == "unavailable"
+                    for value in prepared_results.values()
+                )
+            else:
+                if ranked is None:
+                    if timings is None:
+                        ranked, rerank_cacheable = run_reranking_graph()
+                    else:
+                        with timings.measure("reranking"):
+                            ranked, rerank_cacheable = run_reranking_graph()
+                if assessment_unavailable:
+                    more_results, more_cache_hits = {}, []
+                else:
+                    more_results, more_cache_hits = assess_many(remaining, component_names)
+                prepared_results.update(more_results)
+                cache_hits.extend(more_cache_hits)
+                assessment_unavailable = assessment_unavailable or any(
+                    value.get("relation") == "unavailable"
+                    for value in more_results.values()
+                )
+
             if (
                 rerank_key is not None
-                and getattr(ranked, "cacheable", True) is not False
+                and rerank_cacheable
                 and len(ranked) == len(candidate_by_id)
                 and {hit[0].chunk_id for hit in ranked} == set(candidate_by_id)
             ):
@@ -316,124 +697,51 @@ def build_evidence_workflow(
                         for hit in ranked
                     ],
                 )
-        assessment_results = dict(state.get("assessment_results", {}))
-        contexts = dict(state.get("contexts", {}))
-        context_windows = dict(state.get("context_windows", {}))
-        if select_evidence is not None:
-            finalists = ranked[: max(5, limit * 2)]
-            old_assessments = {
-                identifier: _assessment_classification_signature(value)
-                for identifier, value in assessment_results.items()
-                if value is not None
-            }
-            component_names = _component_names(assessment_results)
-            phase_name = "Assess" if assessment_pass == 1 else "Review"
+
+            finalists = ranked[:finalist_count]
+            finalist_ids = {hit[0].chunk_id for hit in finalists}
+            missing_finalists = [
+                hit for hit in finalists if hit[0].chunk_id not in prepared_results
+            ]
+            if missing_finalists:
+                missing_prepared = prepare(missing_finalists)
+                if assessment_unavailable:
+                    for _index, hit, _context in missing_prepared:
+                        prepared_results[hit[0].chunk_id] = _unavailable_assessment()
+                else:
+                    missing_results, missing_cache_hits = assess_many(
+                        missing_prepared, component_names
+                    )
+                    prepared_results.update(missing_results)
+                    cache_hits.extend(missing_cache_hits)
+
             if assessment_pass == 1:
                 report(f"Phase 3/5 · Assess evidence · {len(finalists)} passages")
             else:
                 report(f"Review assessments · {len(finalists)} passages")
 
-            prepared: list[tuple[int, ScoredChunk, str]] = []
-            for index, hit in enumerate(finalists, start=1):
-                chunk, _score = hit
+            # Keep speculative assessments for later candidate decisions and
+            # context extension out of state unless the passage made the final
+            # globally ranked pool.
+            prepared_results = {
+                identifier: value
+                for identifier, value in prepared_results.items()
+                if identifier in finalist_ids
+            }
+            assessment_results.update(prepared_results)
+            for hit in finalists:
+                chunk = hit[0]
                 if chunk.chunk_id not in contexts:
                     context = context_lookup(chunk)
                     contexts[chunk.chunk_id] = (
                         context if isinstance(context, str) and context.strip() else chunk.text
                     )
                     context_windows.setdefault(chunk.chunk_id, 1)
-                prepared.append((index, hit, contexts[chunk.chunk_id]))
-
-            cache_identity = getattr(select_evidence, "assessment_cache_identity", None)
-            cache_hits: list[bool] = []
-
-            def assess_one(index, hit, context, components):
-                chunk, _score = hit
-                key = None
-                if workflow_cache is not None and cache_identity:
-                    key = assessment_cache_key(
-                        {
-                            "identity": cache_identity,
-                            "claim": state["claim"]["text"],
-                            "chunk_id": chunk.chunk_id,
-                            "citation": citation_label(chunk.paper),
-                            "page": chunk.page,
-                            "evidence_role": chunk.evidence_role,
-                            "content_kind": chunk.content_kind,
-                            "context": context,
-                            "components": list(components),
-                        }
-                    )
-                    cached = workflow_cache.get(key)
-                    if cached is not None:
-                        cache_hits.append(True)
-                        report(
-                            f"{phase_name} passage {index}/{len(finalists)} · "
-                            "reused assessment"
-                        )
-                        return chunk.chunk_id, cached
-                cache_hits.append(False)
-                report(
-                    f"{phase_name} passage {index}/{len(finalists)} · "
-                    "waiting for model response"
-                )
-                kwargs = (
-                    {"components": components}
-                    if components and _accepts_keyword(select_evidence, "components")
-                    else {}
-                )
-                if timings is None:
-                    selected = select_evidence(
-                        state["claim"]["text"], hit, context, **kwargs
-                    )
-                else:
-                    with timings.measure("evidence_assessment"):
-                        selected = select_evidence(
-                            state["claim"]["text"], hit, context, **kwargs
-                        )
-                cacheable = not (
-                    isinstance(selected, dict)
-                    and selected.get("__cacheable__", True) is False
-                )
-                if isinstance(selected, dict) and "__cacheable__" in selected:
-                    selected = {
-                        key: value
-                        for key, value in selected.items()
-                        if key != "__cacheable__"
-                    }
-                assessment = _normalise_assessment(selected, context)
-                if key is not None and cacheable:
-                    workflow_cache.set(key, assessment)
-                return chunk.chunk_id, assessment
-
-            prepared_results: dict[str, dict[str, object]] = {}
-            remaining = prepared
-            if not component_names and remaining:
-                # The first assessment establishes component names shared by the rest.
-                index, hit, context = remaining[0]
-                identifier, assessment = assess_one(index, hit, context, ())
-                prepared_results[identifier] = assessment
-                assessment_results[identifier] = assessment
-                component_names = _component_names(assessment_results)
-                remaining = remaining[1:]
-
-            for index, hit, context in remaining:
-                identifier, assessment = assess_one(
-                    index, hit, context, component_names
-                )
-                prepared_results[identifier] = assessment
-                assessment_results[identifier] = assessment
-                if not component_names:
-                    component_names = _component_names(assessment_results)
 
             if cache_hits:
                 report(f"Evidence assessment cache · {sum(cache_hits)} reused · "
                        f"{len(cache_hits) - sum(cache_hits)} model call(s)")
 
-            for _index, hit, _context in prepared:
-                identifier = hit[0].chunk_id
-                if identifier in prepared_results:
-                    assessment_results[identifier] = prepared_results[identifier]
             reclassified = sum(
                 old_assessments.get(identifier)
                 != _assessment_classification_signature(value)
@@ -442,6 +750,21 @@ def build_evidence_workflow(
             )
         else:
             reclassified = 0
+            if ranked is None:
+                ranked, rerank_cacheable = run_reranking_graph()
+            if (
+                rerank_key is not None
+                and rerank_cacheable
+                and len(ranked) == len(candidate_by_id)
+                and {hit[0].chunk_id for hit in ranked} == set(candidate_by_id)
+            ):
+                workflow_cache.set_reranking(
+                    rerank_key,
+                    [
+                        {"chunk_id": hit[0].chunk_id, "score": float(hit[1])}
+                        for hit in ranked
+                    ],
+                )
         relation_counts = {
             relation: sum(
                 value is not None and value.get("relation") == relation
@@ -457,6 +780,14 @@ def build_evidence_workflow(
             f"{relation_counts['contradicts']} contradicting · "
             f"{relation_counts['mixed']} mixed · "
             f"{relation_counts['insufficient']} unresolved"
+            + (
+                f" · {sum(value is not None and value.get('relation') == 'unavailable' for value in assessment_results.values())} provider unavailable"
+                if any(
+                    value is not None and value.get("relation") == "unavailable"
+                    for value in assessment_results.values()
+                )
+                else ""
+            )
             + (f" · {reclassified} reclassified" if assessment_pass > 1 else "")
         )
         return {
@@ -467,6 +798,12 @@ def build_evidence_workflow(
         }
 
     def route_after_assessment(state: EvidenceState) -> str:
+        if any(
+            assessment is not None and assessment.get("relation") == "unavailable"
+            for assessment in state["assessment_results"].values()
+        ):
+            # A provider outage is a technical failure, not an evidence gap.
+            return "finish"
         unresolved = _unresolved_candidate_ids(state["assessment_results"])
         if not unresolved:
             if (
@@ -675,6 +1012,9 @@ def build_evidence_workflow(
             item.get("evidence_relation") == "insufficient" for item in assessed_items
         )
         not_assessed_count = len(items) - len(assessed_items)
+        unavailable_count = sum(
+            item.get("evidence_status") == "unavailable" for item in items
+        )
         paper_word = "paper" if len(final_papers) == 1 else "papers"
         assessed_paper_word = "paper" if len(assessed_papers) == 1 else "papers"
         report(
@@ -682,7 +1022,11 @@ def build_evidence_workflow(
             f"{len(assessed_items)} assessed across {len(assessed_papers)} source "
             f"{assessed_paper_word} · {unresolved_count} unresolved · "
             f"{not_assessed_count} not assessed"
+            + (f" · {unavailable_count} provider unavailable" if unavailable_count else "")
         )
+        if unavailable_count:
+            result["assessment_incomplete"] = True
+            result["assessment_unavailable_count"] = unavailable_count
         report(f"Synthesis generated · {result['synthesis']['verdict']}")
         report("Evidence workflow complete")
         return {"result": result}
@@ -746,6 +1090,8 @@ def run_evidence_workflow(
     one_per_paper: bool = False,
     max_refinements: int = 1,
     max_context_extensions: int = 1,
+    assessment_workers: int = 4,
+    rerank_workers: int = 4,
 ) -> dict:
     """Execute iterative retrieval and return the existing search result shape."""
     text = claim["text"].strip()
@@ -767,6 +1113,8 @@ def run_evidence_workflow(
         one_per_paper=one_per_paper,
         max_refinements=max_refinements,
         max_context_extensions=max_context_extensions,
+        assessment_workers=assessment_workers,
+        rerank_workers=rerank_workers,
         timings=timings,
     )
     initial_state = cast(EvidenceState, {"claim": claim})
@@ -787,7 +1135,7 @@ def _synthesize_cross_paper(items: Sequence[dict]) -> dict[str, object]:
     scope_keys = ("population", "unit", "outcome", "geography", "time")
     for item in items:
         relation = str(item.get("evidence_relation", "not_assessed"))
-        if relation == "not_assessed":
+        if relation not in relation_passages:
             continue
         chunk = item["chunk"]
         source_id = chunk.paper.zotero_key
@@ -1164,6 +1512,8 @@ def _normalise_assessment(selection, context: str) -> dict[str, object]:
             "components": [],
         }
     relation = str(selection.get("relation", "insufficient"))
+    if relation == "unavailable":
+        return _unavailable_assessment(str(selection.get("reason", "")))
     quote_directness = str(selection.get("quote_directness", "unrelated"))
     quote = " ".join(str(selection.get("matched_quote", "")).split())
 
@@ -1244,6 +1594,18 @@ def _normalise_assessment(selection, context: str) -> dict[str, object]:
         "quote_role": str(selection.get("quote_role", "other")),
         "quote_directness": quote_directness,
         "components": components,
+    }
+
+
+def _unavailable_assessment(reason: str = "") -> dict[str, object]:
+    return {
+        "relation": "unavailable",
+        "assessment_status": "provider_unavailable",
+        "matched_quote": "",
+        "reason": reason
+        or "Evidence assessment could not be completed because the model provider was unavailable.",
+        "scope": {},
+        "components": [],
     }
 
 

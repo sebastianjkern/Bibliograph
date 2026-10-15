@@ -8,9 +8,11 @@ callables or small stateful resources instead of selecting implementations.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from functools import wraps
 from pathlib import Path
+from threading import Lock
+from time import sleep
 from typing import Any
 
 from adapters.providers.model_runtimes.registry import build_chat, build_embedding
@@ -24,8 +26,10 @@ from .adapters.acquisition import (
 )
 from .adapters.ikarus import (
     IkarusBackend,
+    IkarusIndexError,
     inspect_ikarus_index,
     is_ikarus_index,
+    _can_seed_ikarus_index,
     open_ikarus_staging,
 )
 from .adapters.ollama_ocr import configured_page_extractor
@@ -83,34 +87,29 @@ def run_sync(
     database = settings["db"]
     page_extractor = configured_page_extractor(settings, verbose=verbose)
 
-    if rebuild:
-        with open_ikarus_staging(
-            database,
-            embedding=embedding,
-            ingestion_strategy=classification,
-            classification_enabled=settings.get("classification", {}).get("enabled", False),
-        ) as store:
-            return sync_library(
-                settings,
-                store=store,
-                zotero=zotero,
-                strategies=strategies,
-                extract_pages=page_extractor,
-                storage_dirs=storage_dirs,
-                collection=collection,
-                rebuild=True,
-                show_progress=show_progress,
-                force_reindex=force_reindex,
-                verbose=verbose,
-            )
-
-    with IkarusBackend(
+    database_path = Path(database)
+    existing_ikarus = database_path.is_file() and is_ikarus_index(database_path)
+    if database_path.is_file() and not existing_ikarus and not rebuild:
+        raise IkarusIndexError("This index requires an explicit `bibliograph sync --rebuild`.")
+    seed_existing = not rebuild and _can_seed_ikarus_index(
+        database_path, str(embedding["id"])
+    )
+    if existing_ikarus and not rebuild and not seed_existing:
+        raise IkarusIndexError(
+            "The stored embedding configuration is incompatible; run `bibliograph sync --rebuild`."
+        )
+    rebuild_generation = rebuild or not seed_existing
+    with open_ikarus_staging(
         database,
-        mode="write",
         embedding=embedding,
         ingestion_strategy=classification,
         classification_enabled=settings.get("classification", {}).get("enabled", False),
+        seed_existing=seed_existing,
     ) as store:
+        if seed_existing and not rebuild_generation:
+            repaired = store.repair_missing_vectors()
+            if repaired:
+                logger.warning("Repaired %d missing chunk vectors in the staged index", repaired)
         return sync_library(
             settings,
             store=store,
@@ -119,9 +118,9 @@ def run_sync(
             extract_pages=page_extractor,
             storage_dirs=storage_dirs,
             collection=collection,
-            rebuild=False,
+            rebuild=rebuild_generation,
             show_progress=show_progress,
-            force_reindex=force_reindex,
+            force_reindex=force_reindex or rebuild_generation,
             verbose=verbose,
         )
 
@@ -139,13 +138,27 @@ def run_ingest_pdfs(
     embedding["probe"]()
     classification = _paper_evidence_strategy(settings)
     page_extractor = configured_page_extractor(settings, verbose=verbose)
-    with IkarusBackend(
-        settings["db"],
-        mode="write",
+    database = Path(settings["db"])
+    if database.is_file() and not is_ikarus_index(database):
+        raise IkarusIndexError(
+            "This index requires `bibliograph sync --rebuild` before PDF ingestion."
+        )
+    seed_existing = database.is_file() and is_ikarus_index(database)
+    if seed_existing and not _can_seed_ikarus_index(database, str(embedding["id"])):
+        raise IkarusIndexError(
+            "The active vector index cannot be safely extended. Run `bibliograph sync --rebuild` first."
+        )
+    with open_ikarus_staging(
+        database,
         embedding=embedding,
         ingestion_strategy=classification,
         classification_enabled=settings.get("classification", {}).get("enabled", False),
+        seed_existing=seed_existing,
     ) as store:
+        if seed_existing:
+            repaired = store.repair_missing_vectors()
+            if repaired:
+                logger.warning("Repaired %d missing chunk vectors in the staged index", repaired)
         return ingest_pdfs(
             directory,
             store=store,
@@ -339,6 +352,32 @@ def _llm_tools(
             override = {"model": override}
         stage_settings = dict(llm_settings)
         stage_settings.update(override)
+        evidence_warning_lock = Lock()
+        evidence_warning_emitted = False
+
+        def unavailable_evidence(*_args, **_kwargs):
+            return {
+                "relation": "unavailable",
+                "assessment_status": "provider_unavailable",
+                "matched_quote": "",
+                "reason": "Evidence assessment could not be completed because the model provider was unavailable.",
+                "scope": {},
+                "components": [],
+                "__cacheable__": False,
+            }
+
+        def provider_failure(error: Exception) -> dict:
+            nonlocal evidence_warning_emitted
+            with evidence_warning_lock:
+                if not evidence_warning_emitted:
+                    logger.warning(
+                        "LLM %s unavailable; affected passages will be marked not assessed: %s",
+                        label,
+                        error,
+                    )
+                    evidence_warning_emitted = True
+            return unavailable_evidence()
+
         cache_key = (
             stage_settings.get("provider"),
             stage_settings.get("model"),
@@ -348,10 +387,20 @@ def _llm_tools(
         try:
             if cache_key not in chats:
                 chats[cache_key] = build_chat({**settings, "llm": stage_settings})
-            primary = factory(chats[cache_key]["complete"])
+            complete = chats[cache_key]["complete"]
+            if str(stage_settings.get("provider", "")).casefold() == "codex":
+                provider_complete = complete
+
+                def complete(messages, **kwargs):
+                    return provider_complete(_replace_null_bytes(messages), **kwargs)
+
+            primary = factory(complete)
         except Exception as error:
             if mode == "required":
                 raise
+            if stage == "evidence":
+                initialization_error = error
+                return lambda *_args, **_kwargs: provider_failure(initialization_error)
             logger.warning("LLM %s initialization unavailable; using fallback: %s", label, error)
             return fallback_tool
         identity_settings = {
@@ -383,10 +432,16 @@ def _llm_tools(
             try:
                 return primary(*args, **kwargs)
             except Exception as error:
+                if stage == "evidence" and _is_transient_provider_error(error):
+                    sleep(0.25)
+                    try:
+                        return primary(*args, **kwargs)
+                    except Exception as retry_error:
+                        error = retry_error
+                if stage == "evidence":
+                    return provider_failure(error)
                 logger.warning("LLM %s unavailable; using fallback: %s", label, error)
                 result = fallback_tool(*args, **kwargs)
-                if stage == "evidence" and isinstance(result, dict):
-                    return {**result, "__cacheable__": False}
                 if stage == "rerank" and isinstance(result, list):
                     return _UncacheableList(result)
                 return result
@@ -474,6 +529,38 @@ def _llm_tools(
             explain(claim, evidence, complete=complete)
         )
     return tools
+
+
+def _is_transient_provider_error(error: Exception) -> bool:
+    message = str(error).casefold()
+    return any(
+        marker in message
+        for marker in (
+            "timed out",
+            "timeout",
+            "cannot connect",
+            "connection refused",
+            "connection reset",
+            "temporarily unavailable",
+            "http 429",
+            "http 502",
+            "http 503",
+            "http 504",
+        )
+    )
+
+
+def _replace_null_bytes(value: Any) -> Any:
+    """Remove NULs from Codex prompt payloads before they reach subprocess argv."""
+    if isinstance(value, str):
+        return value.replace("\x00", " ")
+    if isinstance(value, Mapping):
+        return {key: _replace_null_bytes(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_replace_null_bytes(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_replace_null_bytes(item) for item in value)
+    return value
 
 
 def _deterministic_llm_tools(stages: set[str]) -> dict[str, Callable]:
