@@ -4,12 +4,14 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-if [[ -f .env ]]; then
+for env_file in dev.env .env; do
+    [[ -f "$env_file" ]] || continue
     set -a
-    # shellcheck disable=SC1091
-    source .env
+    # These are developer-owned local files and are intentionally shell-sourced.
+    # shellcheck disable=SC1090
+    source "$env_file"
     set +a
-fi
+done
 
 mapfile -d '' staged_files < <(git diff --cached --name-only --diff-filter=ACMR -z)
 python_files=()
@@ -27,14 +29,18 @@ echo "Running mypy..."
 uv run --extra dev mypy
 
 if [[ -z "${SONAR_TOKEN:-}" || "$SONAR_TOKEN" == "your_sonarqube_project_token" ]]; then
-    echo "SonarQube pre-commit check needs SONAR_TOKEN. Set it in .env from dev.env.example." >&2
+    echo "SonarQube pre-commit check needs SONAR_TOKEN. Copy dev.env.example to dev.env and set it there." >&2
     exit 1
 fi
-if ! command -v sonar-scanner >/dev/null 2>&1; then
+sonar_scanner="$(command -v sonar-scanner || true)"
+if [[ -z "$sonar_scanner" && -x "$HOME/.local/bin/sonar-scanner" ]]; then
+    sonar_scanner="$HOME/.local/bin/sonar-scanner"
+fi
+if [[ -z "$sonar_scanner" ]]; then
     echo "SonarScanner CLI was not found on PATH; install it before committing." >&2
     exit 1
 fi
 
 sonar_host_url="${SONAR_HOST_URL:-http://localhost:9000}"
 echo "Running SonarQube analysis against ${sonar_host_url}..."
-sonar-scanner -Dsonar.host.url="$sonar_host_url"
+"$sonar_scanner" -Dsonar.host.url="$sonar_host_url"
