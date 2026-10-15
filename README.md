@@ -100,6 +100,15 @@ uv run bibliograph --profile local --embedding-model nomic-embed-text sync
 
 Keep secrets in `.env` rather than in the TOML file. The generic `BIBLIOGRAPH_*` variables are preferred; established `ZOTERO_*`, `OPENAI_*`, `OLLAMA_*`, and remote-acquisition variables remain supported for compatibility.
 
+For repository development tooling, copy [`dev.env.example`](dev.env.example) to `.env` and set the SonarQube project token. Keep credentials in `.env`; it is ignored by Git. Load the variables into your shell before running SonarScanner:
+
+```bash
+set -a
+source .env
+set +a
+sonar-scanner -Dsonar.host.url="$SONAR_HOST_URL"
+```
+
 ```env
 BIBLIOGRAPH_ZOTERO_LIBRARY_ID=your_library_id
 BIBLIOGRAPH_ZOTERO_LIBRARY_TYPE=user
@@ -182,8 +191,17 @@ For one compatibility release, `find-sources` and `find` delegate to `search`, `
 
 ```bash
 uv run ruff check .
+uv run mypy
 uv run pytest
 ```
+
+Install the repository's Git pre-commit hook once per checkout:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook runs Ruff lint and format checks on staged Python files, the configured mypy check, and SonarQube analysis. SonarQube must be running, and `dev.env` or `.env` must contain a project token. Start by copying [`dev.env.example`](dev.env.example) to `dev.env`; the hook loads `dev.env` automatically (then `.env`, if present). The project settings are in `sonar-project.properties` and scanner output goes to `.scannerwork/`.
 
 The main package boundaries are:
 

@@ -17,6 +17,7 @@ __pycache__/
 .ruff_cache
 .pytest_cache
 .pytest-codex
+.scannerwork/
 .agents
 
 # Build and local development artifacts

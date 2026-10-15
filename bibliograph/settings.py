@@ -14,13 +14,17 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from adapters.providers.model_runtimes.registry import chat_names, embedding_names, resolve_name
+from .settings_validation import (
+    _ACQUISITION_STRATEGIES as _ACQUISITION_STRATEGIES,
+)
+from .settings_validation import (
+    _LLM_STAGES as _LLM_STAGES,
+)
+from .settings_validation import (
+    _validate,
+)
 
 type Settings = dict[str, Any]
-
-_LLM_STAGES = frozenset({"expand", "rerank", "evidence", "rationale"})
-_ACQUISITION_STRATEGIES = frozenset({"cache", "zotero-storage", "zotero-api", "remote"})
-
 
 DEFAULT_SETTINGS: Settings = {
     "db": "bibliograph.db",
@@ -234,7 +238,7 @@ def _apply_provider_environment(
 ) -> None:
     provider = str(provider_settings.get("provider", "")).casefold()
     if provider in {"openai", "openai-compatible"}:
-        values = {
+        values: dict[str, Any] = {
             "base_url": os.getenv("OPENAI_BASE_URL"),
             "api_key": os.getenv("OPENAI_API_KEY"),
             "model": os.getenv("OPENAI_EMBEDDING_MODEL" if role == "embedding" else "LLM_MODEL"),
@@ -319,141 +323,6 @@ def _synchronise_compatibility_aliases(settings: Settings) -> None:
         legacy_email = remote.get("unpaywall_email")
         if legacy_email is not None:
             remote["email"] = legacy_email
-
-
-def _validate(settings: Mapping[str, Any]) -> None:
-    embedding = settings.get("embedding")
-    llm = settings.get("llm")
-    acquisition = settings.get("acquisition")
-    remote = settings.get("remote")
-    classification = settings.get("classification")
-    pdf_extraction = settings.get("pdf_extraction")
-    if not isinstance(embedding, Mapping) or not isinstance(llm, Mapping):
-        raise ValueError("embedding and llm settings must be tables")
-    if not isinstance(pdf_extraction, Mapping):
-        raise ValueError("pdf_extraction settings must be a table")
-    if pdf_extraction.get("provider") not in {"pymupdf", "ollama"}:
-        raise ValueError("pdf_extraction.provider must be 'pymupdf' or 'ollama'")
-    if pdf_extraction.get("ollama_mode") not in {"hybrid", "all"}:
-        raise ValueError("pdf_extraction.ollama_mode must be 'hybrid' or 'all'")
-    if not isinstance(pdf_extraction.get("ollama_model"), str) or not pdf_extraction[
-        "ollama_model"
-    ].strip():
-        raise ValueError("pdf_extraction.ollama_model must be a non-empty model name")
-    if not isinstance(pdf_extraction.get("ollama_base_url"), str) or not pdf_extraction[
-        "ollama_base_url"
-    ].strip():
-        raise ValueError("pdf_extraction.ollama_base_url must be a non-empty URL")
-    min_text_chars = pdf_extraction.get("min_text_chars")
-    if (
-        not isinstance(min_text_chars, int)
-        or isinstance(min_text_chars, bool)
-        or min_text_chars < 1
-    ):
-        raise ValueError("pdf_extraction.min_text_chars must be a positive integer")
-    _validate_provider(embedding, section="embedding", choices=embedding_names())
-    _validate_provider(llm, section="llm", choices=chat_names())
-    batch_size = embedding.get("batch_size")
-    if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size <= 0:
-        raise ValueError("embedding.batch_size must be a positive integer")
-    mode = llm.get("mode")
-    if mode not in {"off", "optional", "required"}:
-        raise ValueError("llm.mode must be one of: off, optional, required")
-    if llm.get("rerank_strategy") not in {"llm", "systemone"}:
-        raise ValueError("llm.rerank_strategy must be one of: llm, systemone")
-    systemone_model = llm.get("systemone_model")
-    if systemone_model is not None and (
-        not isinstance(systemone_model, str) or not systemone_model.strip()
-    ):
-        raise ValueError("llm.systemone_model must be a non-empty model name")
-    systemone_workers = llm.get("systemone_workers")
-    if (
-        not isinstance(systemone_workers, int)
-        or isinstance(systemone_workers, bool)
-        or systemone_workers <= 0
-    ):
-        raise ValueError("llm.systemone_workers must be a positive integer")
-    stages = llm.get("stages")
-    if not isinstance(stages, list) or not all(isinstance(stage, str) for stage in stages):
-        raise ValueError("llm.stages must be a list of strings")
-    unknown_stages = sorted(set(stages) - _LLM_STAGES)
-    if unknown_stages:
-        raise ValueError(
-            "llm.stages contains unknown stage(s): "
-            f"{', '.join(unknown_stages)}; choose from {', '.join(sorted(_LLM_STAGES))}"
-        )
-    models = llm.get("models", {})
-    if not isinstance(models, Mapping):
-        raise ValueError("llm.models must be a table mapping stages to model settings")
-    unknown_model_stages = sorted(set(models) - _LLM_STAGES)
-    if unknown_model_stages:
-        raise ValueError(
-            "llm.models contains unknown stage(s): "
-            f"{', '.join(unknown_model_stages)}; choose from {', '.join(sorted(_LLM_STAGES))}"
-        )
-    for stage, override in models.items():
-        if isinstance(override, str):
-            if not override.strip():
-                raise ValueError(f"llm.models.{stage} must be a non-empty model name")
-            continue
-        if not isinstance(override, Mapping):
-            raise ValueError(
-                f"llm.models.{stage} must be a model name or a table of provider settings"
-            )
-        unknown_options = sorted(set(override) - {"provider", "model", "base_url", "api_key"})
-        if unknown_options:
-            raise ValueError(
-                f"llm.models.{stage} contains unsupported setting(s): "
-                f"{', '.join(unknown_options)}"
-            )
-        if "provider" in override and resolve_name(override["provider"], kind="chat") is None:
-            raise ValueError(
-                f"llm.models.{stage}.provider must be one of: {', '.join(chat_names())}"
-            )
-        if "model" in override and (
-            not isinstance(override["model"], str) or not override["model"].strip()
-        ):
-            raise ValueError(f"llm.models.{stage}.model must be a non-empty model name")
-        for option in ("base_url", "api_key"):
-            if option in override and override[option] is not None and not isinstance(
-                override[option], str
-            ):
-                raise ValueError(f"llm.models.{stage}.{option} must be a string")
-    if (
-        not isinstance(acquisition, Mapping)
-        or not isinstance(acquisition.get("order"), list)
-        or not all(isinstance(name, str) for name in acquisition["order"])
-    ):
-        raise ValueError("acquisition.order must be a list")
-    unknown_strategies = sorted(set(acquisition["order"]) - _ACQUISITION_STRATEGIES)
-    if unknown_strategies:
-        raise ValueError(
-            "acquisition.order contains unknown strategy/strategies: "
-            f"{', '.join(unknown_strategies)}; choose from "
-            f"{', '.join(sorted(_ACQUISITION_STRATEGIES))}"
-        )
-    if not isinstance(classification, Mapping):
-        raise ValueError("classification settings must be a table")
-    if not isinstance(classification.get("enabled"), bool):
-        raise ValueError("classification.enabled must be a boolean")
-    model = classification.get("model")
-    if model is not None and (not isinstance(model, str) or not model.strip()):
-        raise ValueError("classification.model must be a non-empty model name")
-    if classification["enabled"] and mode == "off":
-        raise ValueError("classification.enabled requires llm.mode to be optional or required")
-    if not isinstance(remote, Mapping):
-        raise ValueError("remote settings must be a table")
-    if not isinstance(remote.get("playwright_headless"), bool):
-        raise ValueError("remote.playwright_headless must be a boolean")
-
-
-def _validate_provider(
-    config: Mapping[str, Any], *, section: str, choices: tuple[str, ...]
-) -> None:
-    provider = config.get("provider")
-    kind = "embedding" if section == "embedding" else "chat"
-    if resolve_name(provider, kind=kind) is None:
-        raise ValueError(f"{section}.provider must be one of: {', '.join(choices)}")
 
 
 def _deep_merge(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> Settings:

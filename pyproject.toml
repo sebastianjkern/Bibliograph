@@ -27,6 +27,7 @@ all = [
     "playwright>=1.50",
 ]
 dev = [
+    "mypy>=1.13,<2",
     "pytest>=8.0",
     "ruff>=0.6",
 ]
@@ -48,6 +49,22 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+[tool.mypy]
+python_version = "3.12"
+files = [
+    "bibliograph/adapters/ikarus_index.py",
+    "bibliograph/adapters/ikarus_records.py",
+    "bibliograph/pipeline/evidence_assessment.py",
+    "bibliograph/pipeline/evidence_synthesis.py",
+    "bibliograph/pipeline/evidence_workflow_utils.py",
+    "bibliograph/pipeline/llm_tools.py",
+    "bibliograph/settings_validation.py",
+]
+check_untyped_defs = true
+follow_imports = "silent"
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_ignores = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
