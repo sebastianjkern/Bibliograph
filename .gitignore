@@ -24,6 +24,7 @@ __pycache__/
 .venv/
 bibliograph.db
 bibliograph.db.assessment-cache.sqlite3
+*.hnsw
 
 FEATURES.md
 
