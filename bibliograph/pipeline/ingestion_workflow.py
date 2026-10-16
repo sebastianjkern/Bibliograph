@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import base64
-from io import BytesIO
 import operator
 import re
 from collections.abc import Callable
-from threading import Lock
-from typing import Annotated
+from io import BytesIO
 from pathlib import Path
-from typing import Any, TypedDict
+from threading import Lock
+from typing import Annotated, Any, TypedDict
+
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
@@ -135,9 +135,7 @@ def make_hybrid_page_extractor(
                 for page_number, page in enumerate(document, start=1):
                     native_text = page.get_text("text").strip()
                     blocks = _native_blocks(page)
-                    needs_ocr = mode == "all" or not _has_usable_text(
-                        native_text, min_text_chars
-                    )
+                    needs_ocr = mode == "all" or not _has_usable_text(native_text, min_text_chars)
                     image = ""
                     if needs_ocr:
                         image_bytes = page.get_pixmap(
@@ -170,10 +168,7 @@ def make_hybrid_page_extractor(
                 {"ocr_tasks": ocr_tasks},
                 config={"max_concurrency": len(ocr_tasks)},
             )
-            ocr_by_page = {
-                item["page_number"]: item
-                for item in ocr_results.get("ocr_results", [])
-            }
+            ocr_by_page = {item["page_number"]: item for item in ocr_results.get("ocr_results", [])}
 
         results = []
         section: str | None = None
@@ -209,8 +204,7 @@ def make_hybrid_page_extractor(
         return results
 
     extract.indexing_fingerprint = (
-        f"langgraph-pdf-doctags-v1:{model}:{mode}:"
-        f"min-text={min_text_chars}"
+        f"langgraph-pdf-doctags-v1:{model}:{mode}:min-text={min_text_chars}"
     )
     return extract
 
@@ -243,7 +237,9 @@ def _build_page_graph():
 
     def route_after_inspect(state: PageState) -> str:
         if state["needs_ocr"]:
-            reason = "no embedded text" if not state.get("native_text", "").strip() else "damaged text"
+            reason = (
+                "no embedded text" if not state.get("native_text", "").strip() else "damaged text"
+            )
             _report_page_task(state, f"OCR needed: {reason}")
             return "ocr"
         return "classify"
@@ -271,9 +267,7 @@ def _build_page_graph():
         if not used_docling_labels:
             _report_page_task(state, "DocTags had no semantic labels; using layout rules")
         if not blocks and content.strip():
-            blocks = [
-                {"id": "b0", "text": content.strip(), "bbox": None, "source_kind": "ocr"}
-            ]
+            blocks = [{"id": "b0", "text": content.strip(), "bbox": None, "source_kind": "ocr"}]
             categories = _heuristic_categories(blocks)
         return {"blocks": blocks, "categories": categories}
 
@@ -294,13 +288,15 @@ def _build_page_graph():
         if kept_categories:
             counts_str = ", ".join(f"{v} {k}" for k, v in sorted(kept_categories.items()))
             _report_page_task(state, f"Content types: {counts_str}")
-        
+
         # In verbose mode, show actual content with classifications
         if verbose and blocks:
             from rich.text import Text
+
             from ..logging_utils import stderr_console
+
             console = stderr_console()
-            page_num = state.get('page_number', 0)
+            page_num = state.get("page_number", 0)
             console.print(f"[bold]Page {page_num} blocks and classifications:[/bold]")
             for block in blocks:
                 block_id = block.get("id", "")
@@ -333,7 +329,7 @@ def _build_page_graph():
                 line.append(text, style=color)
                 console.print(line)
             console.print()
-        
+
         return {"categories": categories}
 
     def filter_content(state: PageState) -> dict[str, Any]:
@@ -390,10 +386,7 @@ def _report_page_task(state: PageState, task: str) -> None:
 
 def _build_ocr_batch_graph():
     def dispatch(state: OcrBatchState):
-        return [
-            Send("ocr_page", {"ocr_task": task})
-            for task in state.get("ocr_tasks", [])
-        ]
+        return [Send("ocr_page", {"ocr_task": task}) for task in state.get("ocr_tasks", [])]
 
     def ocr_page(state: dict[str, Any]) -> dict[str, Any]:
         task = state["ocr_task"]
@@ -421,13 +414,18 @@ def _build_ocr_batch_graph():
             page_number=page_number,
         )
         if progress is not None and not used_docling_labels:
-            progress(f"Page {page_number}/{page_count}: DocTags had no semantic labels; using layout rules")
+            progress(
+                f"Page {page_number}/{page_count}: DocTags had no semantic labels; "
+                "using layout rules"
+            )
         if not blocks and content.strip():
-            blocks = [
-                {"id": "b0", "text": content.strip(), "bbox": None, "source_kind": "ocr"}
-            ]
+            blocks = [{"id": "b0", "text": content.strip(), "bbox": None, "source_kind": "ocr"}]
             categories = _heuristic_categories(blocks)
-        return {"ocr_results": [{"page_number": page_number, "blocks": blocks, "categories": categories}]}
+        return {
+            "ocr_results": [
+                {"page_number": page_number, "blocks": blocks, "categories": categories}
+            ]
+        }
 
     graph = StateGraph(OcrBatchState)
     graph.add_node("ocr_page", ocr_page)
@@ -535,17 +533,15 @@ def _parse_docling_page(
         return blocks, _heuristic_categories(blocks), False
 
     try:
-        from PIL import Image
         from docling_core.types.doc import ContentLayer, DoclingDocument
         from docling_core.types.doc.document import DocTagsDocument
+        from PIL import Image
 
         with Image.open(BytesIO(image_bytes)) as page_image:
             doctags = DocTagsDocument.from_doctags_and_image_pairs(
                 [content], [page_image.convert("RGB")]
             )
-        document = DoclingDocument.load_from_doctags(
-            doctags, document_name=f"page-{page_number}"
-        )
+        document = DoclingDocument.load_from_doctags(doctags, document_name=f"page-{page_number}")
         blocks: list[Block] = []
         categories: dict[str, str] = {}
         for item, _level in document.iterate_items(

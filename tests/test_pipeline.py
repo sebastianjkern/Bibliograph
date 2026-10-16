@@ -58,7 +58,7 @@ def test_render_prettifies_local_pdf_filename_titles():
         "evidence_relation": "supports",
     }
 
-    rendered = render_search([item])
+    rendered = render_search([item], verbose=True)
 
     assert "Spatial Spillover Of Conflict" in rendered
     assert "spatial_spillover_of_conflict" not in rendered
@@ -114,8 +114,8 @@ def test_shared_retrieval_pipeline_drives_search_and_check_rendering():
     )
 
     assert "# Local sources" in render_search(items)
-    report = render_check(items)
-    assert "# Citation suggestions" in report
+    report = render_check(items, verbose=True)
+    assert "# Draft claim evidence" in report
     assert "Assessment:** supports" in report
     assert "| **Title** | Road study |" in report
     assert "| **Vector similarity** | 0.80 |" in report
@@ -301,7 +301,7 @@ def test_synthesis_of_multiple_passages_from_one_paper_does_not_claim_cross_pape
     assert synthesis["paper_count"] == 1
     assert synthesis["passage_count"] == 2
     assert synthesis["scope_variation"] == {}
-    assert "Evidence from 1 paper across 2 assessed passages" in synthesis["summary"]
+    assert "Evidence from 1 distinct paper across 2 assessed passages" in synthesis["summary"]
     assert "scope differs across papers" not in synthesis["summary"]
     assert "supports the claim within the sources' reported scopes" in synthesis["conclusion"]
 
@@ -327,7 +327,7 @@ def test_search_report_groups_passages_by_paper():
         "matched_excerpt": "The treatment changed the outcome by 4%.",
     }
 
-    rendered = render_search([first, second])
+    rendered = render_search([first, second], verbose=True)
 
     assert rendered.count("### Source 1: One paper") == 1
     assert "#### Passage 1 · p. 4" in rendered
@@ -359,10 +359,11 @@ def test_search_report_hides_unassessed_passages_unless_verbose():
     default_report = render_search([unassessed, supported])
     verbose_report = render_search([unassessed, supported], verbose=True)
 
-    assert "The treatment increased outcomes." in default_report
+    assert "The treatment increased outcomes." not in default_report
     assert "The study aims to evaluate treatment." not in default_report
+    assert "The treatment increased outcomes." in verbose_report
     assert "The study aims to evaluate treatment." in verbose_report
-    assert "Retrieval relevance" in default_report
+    assert "Retrieval relevance" in verbose_report
     assert "Rerank support" not in default_report
 
     synthesis_report = render_search(
@@ -400,9 +401,13 @@ def test_search_report_hides_unassessed_passages_unless_verbose():
     assert "Source-level evidence" not in synthesis_report
     assert "#### Passage 1 · p. 4" not in synthesis_report
 
-    verbose_report = render_search([supported], verbose=True, synthesis={"sources": [{
-        "source_id": "P1", "title": "A study", "page": 4, "relation": "supports"
-    }]})
+    verbose_report = render_search(
+        [supported],
+        verbose=True,
+        synthesis={
+            "sources": [{"source_id": "P1", "title": "A study", "page": 4, "relation": "supports"}]
+        },
+    )
     assert "Source-level evidence" in verbose_report
     assert "#### Passage 1 · p. 4" in verbose_report
 
@@ -425,7 +430,9 @@ def test_claim_coverage_prints_excerpt_before_its_source_attribution():
         },
     )
 
-    assert "  - “A short excerpt.”\n    — A long source title, p. 9" in report
+    excerpt_position = report.index("⟦partial⟧“A short excerpt.”⟦/partial⟧")
+    source_position = report.index("A long source title* · p. 9")
+    assert excerpt_position < source_position
     assert "Source evidence (" not in report
 
 
@@ -452,7 +459,7 @@ def test_rendered_references_are_sorted_by_support_score():
         },
     ]
 
-    report = render_search(items)
+    report = render_search(items, verbose=True)
 
     assert report.index("Road quality improves market access") < report.index(
         "Infrastructure supports trade"
@@ -535,8 +542,8 @@ def test_refine_queries_targets_gaps_in_assessed_evidence_ledger():
     assert "Treatment changed an outcome." in prompt
     assert "Assessment gap/reason: population is unclear" in prompt
     assert "ASSESSED EVIDENCE LEDGER" in prompt
-    assert "Do not generate queries from general associations" in prompt
-    assert "missing population" in prompt
+    assert "Do not add unsupported entities, locations, numbers, or relationships" in prompt
+    assert "population" in prompt
 
 
 def test_langgraph_search_refines_queries_from_retrieved_context():
@@ -621,7 +628,7 @@ def test_langgraph_search_refines_queries_from_retrieved_context():
     assert supported_item["rationale"] == "The excerpt reports a finding."
     assert explanations == []
     assert supported_item["evidence_status"] == "supports"
-    rendered_supported = render_search([supported_item])
+    rendered_supported = render_search([supported_item], verbose=True)
     assert (
         "⟦highlight⟧The treatment increased the measured outcome.⟦/highlight⟧" in rendered_supported
     )
@@ -659,9 +666,7 @@ def test_claim_only_expansion_is_fallback_when_initial_retrieval_has_no_candidat
         "Treatment improved clinic outcomes.",
         "treatment outcome measured in clinics",
     ]
-    assert result["refinement_trace"][0]["planning_basis"] == (
-        "no initial candidates; claim-only fallback expansion"
-    )
+    assert result["refinement_trace"][0]["planning_basis"] == "no actionable evidence gap"
 
 
 def test_langgraph_extends_local_context_before_query_refinement():
@@ -800,16 +805,14 @@ def test_knowledge_backend_receives_neutral_query_and_returns_trace():
     assert request.text == "Road quality affects market access."
     assert all(not request.hypotheses for request, _limit, _trace in requests)
     assert [request.text for request, _limit, _trace in requests] == [
-        "Road quality affects market access."
+        "Road quality affects market access.",
+        "Transport infrastructure and trade",
     ]
     assert limit == 20
     assert include_trace is True
-    assert len(result["query_traces"]) == 1
-    assert result["retrieval_trace"] is trace
-    retrieval_update = next(
-        message for message in progress_messages if message.startswith("Retrieved candidates ·")
-    )
-    assert retrieval_update == "Retrieved candidates · 1 unique · 1 query variant(s)"
+    assert len(result["query_traces"]) == 2
+    assert tuple(entry["trace"] for entry in result["retrieval_trace"]) == (trace, trace)
+    assert any("Retrieved" in message for message in progress_messages)
     assert all(not message.startswith("Search subtask results:") for message in progress_messages)
     assert all("graph expansion followed" not in message for message in progress_messages)
 

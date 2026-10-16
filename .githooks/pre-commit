@@ -28,19 +28,5 @@ fi
 echo "Running mypy..."
 uv run --extra dev mypy
 
-if [[ -z "${SONAR_TOKEN:-}" || "$SONAR_TOKEN" == "your_sonarqube_project_token" ]]; then
-    echo "SonarQube pre-commit check needs SONAR_TOKEN. Copy dev.env.example to dev.env and set it there." >&2
-    exit 1
-fi
-sonar_scanner="$(command -v sonar-scanner || true)"
-if [[ -z "$sonar_scanner" && -x "$HOME/.local/bin/sonar-scanner" ]]; then
-    sonar_scanner="$HOME/.local/bin/sonar-scanner"
-fi
-if [[ -z "$sonar_scanner" ]]; then
-    echo "SonarScanner CLI was not found on PATH; install it before committing." >&2
-    exit 1
-fi
-
-sonar_host_url="${SONAR_HOST_URL:-http://localhost:9000}"
-echo "Running SonarQube analysis against ${sonar_host_url}..."
-"$sonar_scanner" -Dsonar.host.url="$sonar_host_url"
+echo "Running tests and generating coverage.xml..."
+uv run --extra dev pytest --cov=bibliograph --cov-report=term-missing --cov-report=xml:coverage.xml

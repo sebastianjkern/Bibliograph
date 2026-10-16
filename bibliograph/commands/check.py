@@ -11,7 +11,6 @@ from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
-
 from rich.progress import (
     BarColumn,
     Progress,
@@ -130,6 +129,7 @@ def check(
                 stages=stages,
             )
         else:
+
             def dispatch(state: _DraftState):
                 return [
                     Send("check_claim", {"claim_index": index, "claim": claim})

@@ -41,19 +41,24 @@ def test_ikarus_backend_indexes_papers_and_restores_chunk_context(tmp_path):
     with IkarusBackend(database, embedding=_embedding(), mode="write") as backend:
         backend.index_pdf(
             Paper("ROAD", "Roads and Markets", ("Ada Author",), "2024", "10.1/road"),
-            "ROAD", "1", road_pdf,
+            "ROAD",
+            "1",
+            road_pdf,
             extract_pages=lambda _path: [
                 (1, "Better road quality lowers trade costs and expands market access.", "Results")
             ],
         )
         backend.index_pdf(
-            Paper("BIO", "Cell Biology"), "BIO", "1", biology_pdf,
+            Paper("BIO", "Cell Biology"),
+            "BIO",
+            "1",
+            biology_pdf,
             extract_pages=lambda _path: [(3, "Protein folding occurs inside a cell.", "Methods")],
         )
         # Older generic-ingestion indexes lacked the vector metadata kind marker.
         with backend.connection:
             backend.connection.execute(
-                "DELETE FROM vector_attributes WHERE attribute_key='kind'"
+                "DELETE FROM vectorlite_attributes WHERE attribute_key='kind'"
             )
         hits, details = backend.retrieve("road trade market access", limit=5)
 

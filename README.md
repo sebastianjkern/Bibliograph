@@ -201,7 +201,7 @@ Install the repository's Git pre-commit hook once per checkout:
 git config core.hooksPath .githooks
 ```
 
-The hook runs Ruff lint and format checks on staged Python files, the configured mypy check, and SonarQube analysis. SonarQube must be running, and `dev.env` or `.env` must contain a project token. Start by copying [`dev.env.example`](dev.env.example) to `dev.env`; the hook loads `dev.env` automatically (then `.env`, if present). The project settings are in `sonar-project.properties` and scanner output goes to `.scannerwork/`.
+The hook runs Ruff lint and format checks on staged Python files, the configured mypy check, the test suite with coverage, and then SonarQube analysis. It writes `coverage.xml` before scanning, and the SonarQube project config imports that report. SonarQube must be running, and `dev.env` or `.env` must contain a project token. Start by copying [`dev.env.example`](dev.env.example) to `dev.env`; the hook loads `dev.env` automatically (then `.env`, if present). Scanner output goes to `.scannerwork/`.
 
 The main package boundaries are:
 

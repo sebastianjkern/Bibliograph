@@ -1,6 +1,5 @@
 """Provider-independent prompt construction and response parsing."""
 
-import asyncio
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -191,19 +190,38 @@ def expand_query(
     progress: ProgressUpdate | None = None,
 ) -> list[str]:
     """Generate bounded, typed alternate hypotheses using focused prompts."""
-    payloads = asyncio.run(_expand_prompts(claim, complete=complete, progress=progress))
+    payloads: list[tuple[str, Sequence[str]] | None] = [None] * len(_EXPANSION_PROMPTS)
+    with ThreadPoolExecutor(max_workers=min(4, len(_EXPANSION_PROMPTS))) as executor:
+        futures = {
+            executor.submit(
+                _complete_json,
+                complete,
+                _expansion_messages(claim, perspective, types),
+                _EXPANSION_SCHEMA,
+            ): (index, types)
+            for index, (perspective, types) in enumerate(_EXPANSION_PROMPTS)
+        }
+        completed_count = 0
+        for future in as_completed(futures):
+            index, types = futures[future]
+            payloads[index] = (future.result(), types)
+            completed_count += 1
+            if progress is not None:
+                progress(
+                    f"Expanding queries · {completed_count}/{len(_EXPANSION_PROMPTS)} complete"
+                )
     expanded: list[str] = []
     seen: set[str] = {" ".join(claim.split()).casefold()}
-    for content, types in payloads:
+    for result in payloads:
+        if result is None:
+            continue
+        content, types = result
         try:
             payload = _json_object(content)
         except (TypeError, ValueError, json.JSONDecodeError):
             continue
         for item in payload.get("items", []):
-            if (
-                not isinstance(item, dict)
-                or str(item.get("type", "")).casefold() not in types
-            ):
+            if not isinstance(item, dict) or str(item.get("type", "")).casefold() not in types:
                 continue
             text = " ".join(str(item.get("text", "")).split()).strip()
             key = text.casefold()
@@ -252,7 +270,7 @@ def refine_queries(
                 "never invent a threshold. Do not add unsupported entities, locations, numbers, "
                 "or relationships, and do not produce duplicate paraphrases. Return an empty list "
                 "when no useful literature search can address the gap. Return JSON only as "
-                "{\"queries\": [\"...\"]}."
+                '{"queries": ["..."]}.'
             ),
         },
         {
@@ -260,12 +278,18 @@ def refine_queries(
             "content": f"ORIGINAL CLAIM:\n{claim}\n\nASSESSED EVIDENCE LEDGER:\n{context}",
         },
     ]
-    payload = _json_object(_complete_json(complete, messages, {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["queries"],
-        "properties": {"queries": {"type": "array", "items": {"type": "string"}}},
-    }))
+    payload = _json_object(
+        _complete_json(
+            complete,
+            messages,
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["queries"],
+                "properties": {"queries": {"type": "array", "items": {"type": "string"}}},
+            },
+        )
+    )
     queries = payload.get("queries", [])
     if not isinstance(queries, list):
         return []
@@ -281,11 +305,7 @@ def refine_queries(
         text = " ".join(text.split()).strip(" .,:;-")
         lexical_term_count = len(re.findall(r"[^\W_]+", text, flags=re.UNICODE))
         key = text.casefold()
-        if (
-            3 <= lexical_term_count <= 8
-            and len(text) <= 120
-            and key not in seen
-        ):
+        if 3 <= lexical_term_count <= 8 and len(text) <= 120 and key not in seen:
             cleaned.append(text)
             seen.add(key)
         if len(cleaned) == 3:
@@ -316,38 +336,6 @@ def _expansion_messages(claim: str, perspective: str, types: Sequence[str]) -> l
     ]
 
 
-async def _expand_prompts(
-    claim: str,
-    *,
-    complete: Complete,
-    progress: ProgressUpdate | None = None,
-) -> list[tuple[str, Sequence[str]]]:
-    async def run_prompt(index: int, perspective: str, types: Sequence[str]):
-        content = await asyncio.to_thread(
-            _complete_json,
-            complete,
-            _expansion_messages(claim, perspective, types),
-            _EXPANSION_SCHEMA,
-        )
-        return index, content, types
-
-    results: list[tuple[str, Sequence[str]] | None] = [None] * len(_EXPANSION_PROMPTS)
-    tasks = [
-        asyncio.create_task(run_prompt(index, perspective, types))
-        for index, (perspective, types) in enumerate(_EXPANSION_PROMPTS)
-    ]
-    completed_count = 0
-    for completed in asyncio.as_completed(tasks):
-        index, content, types = await completed
-        results[index] = (content, types)
-        completed_count += 1
-        if progress is not None:
-            progress(
-                f"Expanding queries · {completed_count}/{len(_EXPANSION_PROMPTS)} complete"
-            )
-    return [result for result in results if result is not None]
-
-
 def heuristic_rerank(
     _claim: str,
     hits: Sequence[ScoredChunk],
@@ -368,14 +356,19 @@ def rerank(
     if not hits:
         return []
     batches = [hits[start : start + 10] for start in range(0, len(hits), 10)]
-    return asyncio.run(
-        _rerank_batches(
-            claim,
-            batches,
-            complete=complete,
-            progress=progress,
-        )
-    )
+    results: list[list[ScoredChunk] | None] = [None] * len(batches)
+    with ThreadPoolExecutor(max_workers=min(4, len(batches))) as executor:
+        futures = {
+            executor.submit(_rerank_batch, claim, batch, complete=complete): index
+            for index, batch in enumerate(batches)
+        }
+        for completed_count, future in enumerate(as_completed(futures), start=1):
+            results[futures[future]] = future.result()
+            if progress is not None:
+                progress(
+                    f"Reranking candidates · {completed_count}/{len(batches)} batches complete"
+                )
+    return [hit for result in results if result is not None for hit in result]
 
 
 def rerank_with_systemone(
@@ -411,9 +404,7 @@ def rerank_with_systemone(
         for hit in hits:
             text_length = len(hit[0].text)
             if batch and (len(batch) >= 32 or batch_chars + text_length > 12_000):
-                _score_systemone_batch(
-                    claim, question, batch, start, batch_decide, scored
-                )
+                _score_systemone_batch(claim, question, batch, start, batch_decide, scored)
                 start += len(batch)
                 batch = []
                 batch_chars = 0
@@ -426,6 +417,7 @@ def rerank_with_systemone(
             if progress is not None:
                 progress(f"Reranking passages · {len(hits)}/{len(hits)}")
     else:
+
         def score(hit: ScoredChunk) -> ScoredChunk:
             chunk, _retrieval_score = hit
             state = (
@@ -440,9 +432,7 @@ def rerank_with_systemone(
             return chunk, value
 
         with ThreadPoolExecutor(max_workers=min(workers, len(hits))) as executor:
-            futures = {
-                executor.submit(score, hit): index for index, hit in enumerate(hits)
-            }
+            futures = {executor.submit(score, hit): index for index, hit in enumerate(hits)}
             for completed_count, future in enumerate(as_completed(futures), start=1):
                 scored[futures[future]] = future.result()
                 if progress is not None:
@@ -475,42 +465,13 @@ def _score_systemone_batch(
                 "evidence_role": chunk.evidence_role or "unknown",
             }
         )
-        questions[name] = (
-            f"{question} Assess only passage {name}; ignore every other passage."
-        )
+        questions[name] = f"{question} Assess only passage {name}; ignore every other passage."
     values = batch_decide({"claim": claim, "passages": passages}, questions)
-    for offset, (name, (chunk, _retrieval_score)) in enumerate(
-        zip(questions, hits, strict=True)
-    ):
+    for offset, (name, (chunk, _retrieval_score)) in enumerate(zip(questions, hits, strict=True)):
         value = float(values[name])
         if not 0.0 <= value <= 1.0:
             raise ValueError(f"System One returned a score outside [0, 1]: {value}")
         scored[start + offset] = (chunk, value)
-
-
-async def _rerank_batches(
-    claim: str,
-    batches: Sequence[Sequence[ScoredChunk]],
-    *,
-    complete: Complete,
-    progress: ProgressUpdate | None = None,
-) -> list[ScoredChunk]:
-    async def run_batch(index: int, batch: Sequence[ScoredChunk]):
-        result = await asyncio.to_thread(_rerank_batch, claim, batch, complete=complete)
-        return index, result
-
-    results: list[list[ScoredChunk] | None] = [None] * len(batches)
-    tasks = [asyncio.create_task(run_batch(index, batch)) for index, batch in enumerate(batches)]
-    completed_count = 0
-    for completed in asyncio.as_completed(tasks):
-        index, result = await completed
-        results[index] = result
-        completed_count += 1
-        if progress is not None:
-            progress(
-                f"Reranking candidates · {completed_count}/{len(batches)} batches complete"
-            )
-    return [hit for result in results if result is not None for hit in result]
 
 
 def _rerank_batch(
@@ -527,41 +488,41 @@ def _rerank_batch(
         {
             "role": "system",
             "content": (
-                    "Rerank evidence for a draft claim. Return one structured object with an "
-                    "'items' array. "
-                    "Evaluate each candidate against the claim itself, not merely topical overlap. "
-                    "Each item must contain candidate (integer index), relation, evidence_role, "
-                    "directly_entails_claim, contains_claim_specific_result, "
-                    "contains_explicit_finding, requires_unsupported_inference, and source_type. "
-                    "The four evidence fields must be JSON booleans, not numeric scores. "
-                    "The source_type must be exactly primary, secondary, or unknown. "
-                    "Do not calculate or return a final ranking score; the application "
-                    "calculates it. "
-                    "The relation must be exactly one of supports, contradicts, or neutral. "
-                    "The evidence_role must be exactly one of result, conclusion, method, "
-                    "objective, definition, background, secondary, or other. "
-                    "Support means direct factual entailment: the passage must state or clearly "
-                    "report the relationship in the claim. Preserve the claim's population, "
-                    "unit of analysis, geographic scale, outcome, and time period. Do not assume "
-                    "a finding generalizes across populations or measurement units unless the "
-                    "passage establishes that link. A passage that only shares terminology, "
-                    "states the "
-                    "paper's objective, describes a method, or discusses previous studies "
-                    "is neutral, "
-                    "not supporting. Do not infer importance, causality, or results that are "
-                    "absent. "
-                    "Set contains_explicit_finding to false when a passage has no actual finding, "
-                    "estimate, comparison, treatment/outcome relation, or explicit conclusion. "
-                    "Penalize "
-                    "introductions, literature reviews, and second-hand claims, but do not reject "
-                    "them from retrieval. For the example claim 'Road network improvements "
-                    "increased "
-                    "overland trade in "
-                    "Sub-Saharan Africa' and passage 'Our objective is to develop a gravity model "
-                    "for "
-                    "inter-city trade', return relation neutral, directly_entails_claim false, "
-                    "and low evidence quality. "
-                    "Return every candidate exactly once."
+                "Rerank evidence for a draft claim. Return one structured object with an "
+                "'items' array. "
+                "Evaluate each candidate against the claim itself, not merely topical overlap. "
+                "Each item must contain candidate (integer index), relation, evidence_role, "
+                "directly_entails_claim, contains_claim_specific_result, "
+                "contains_explicit_finding, requires_unsupported_inference, and source_type. "
+                "The four evidence fields must be JSON booleans, not numeric scores. "
+                "The source_type must be exactly primary, secondary, or unknown. "
+                "Do not calculate or return a final ranking score; the application "
+                "calculates it. "
+                "The relation must be exactly one of supports, contradicts, or neutral. "
+                "The evidence_role must be exactly one of result, conclusion, method, "
+                "objective, definition, background, secondary, or other. "
+                "Support means direct factual entailment: the passage must state or clearly "
+                "report the relationship in the claim. Preserve the claim's population, "
+                "unit of analysis, geographic scale, outcome, and time period. Do not assume "
+                "a finding generalizes across populations or measurement units unless the "
+                "passage establishes that link. A passage that only shares terminology, "
+                "states the "
+                "paper's objective, describes a method, or discusses previous studies "
+                "is neutral, "
+                "not supporting. Do not infer importance, causality, or results that are "
+                "absent. "
+                "Set contains_explicit_finding to false when a passage has no actual finding, "
+                "estimate, comparison, treatment/outcome relation, or explicit conclusion. "
+                "Penalize "
+                "introductions, literature reviews, and second-hand claims, but do not reject "
+                "them from retrieval. For the example claim 'Road network improvements "
+                "increased "
+                "overland trade in "
+                "Sub-Saharan Africa' and passage 'Our objective is to develop a gravity model "
+                "for "
+                "inter-city trade', return relation neutral, directly_entails_claim false, "
+                "and low evidence quality. "
+                "Return every candidate exactly once."
             ),
         },
         {"role": "user", "content": f"CLAIM:\n{claim}\n\nCANDIDATES:\n{candidates}"},

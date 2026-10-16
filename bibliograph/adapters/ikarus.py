@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from functools import lru_cache
 from inspect import Parameter, signature
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import RLock
 from typing import Any
 
@@ -36,6 +37,9 @@ from .context import join_chunk_context
 from .ikarus_errors import IkarusIndexError
 from .ikarus_index import (
     _can_seed_ikarus_index as _can_seed_ikarus_index,
+)
+from .ikarus_index import (
+    _seed_staging_database as _seed_staging_database,
 )
 from .ikarus_index import (
     inspect_ikarus_index as _inspect_ikarus_index,
@@ -203,6 +207,7 @@ class IkarusBackend:
         if mode not in {"read", "write"}:
             raise ValueError("mode must be 'read' or 'write'")
         self.path = Path(path)
+        self._read_snapshot: TemporaryDirectory[str] | None = None
         self._assessment_cache = None
         self.mode = mode
         self.embedding = embedding
@@ -225,11 +230,31 @@ class IkarusBackend:
         self._assert_index_kind(create=mode == "write")
         if mode == "write" and not self.path.exists():
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        _configure_vectors(self.path, vector_index_namespace)
-        graph = SQLiteGraphStore(self.path)
+        storage_path = self.path
+        if mode == "read":
+            # SQLite-backed providers initialize their schemas on connection,
+            # and Vectorlite may repair metadata while opening. Isolate those
+            # provider side effects from the user's published index.
+            self._read_snapshot = TemporaryDirectory(prefix="bibliograph-read-")
+            snapshot = Path(self._read_snapshot.name) / self.path.name
+            if _vector_store is vectorlite:
+                namespace = str(snapshot.with_suffix(".vectors"))
+                _seed_staging_database(self.path, snapshot, namespace)
+                vector_index_namespace = namespace
+            else:
+                source = sqlite3.connect(f"file:{self.path.resolve()}?mode=ro", uri=True)
+                target = sqlite3.connect(snapshot)
+                try:
+                    source.backup(target)
+                finally:
+                    target.close()
+                    source.close()
+            storage_path = snapshot
+        _configure_vectors(storage_path, vector_index_namespace)
+        graph = SQLiteGraphStore(storage_path)
         self.graph = _ReadCachedGraphStore(graph) if mode == "read" else graph
-        self.lexical = SQLiteFTSIndex(self.path)
-        self.connection = sqlite3.connect(str(self.path), check_same_thread=False)
+        self.lexical = SQLiteFTSIndex(storage_path)
+        self.connection = sqlite3.connect(str(storage_path), check_same_thread=False)
         self._connection_lock = RLock()
         self.connection.row_factory = sqlite3.Row
         self.manifests = None
@@ -238,7 +263,7 @@ class IkarusBackend:
                 self._initialize_bookkeeping()
             from adapters.indexing.sqlite_manifest import SQLiteIndexManifestStore
 
-            self.manifests = SQLiteIndexManifestStore(self.path)
+            self.manifests = SQLiteIndexManifestStore(storage_path)
             if mode == "write":
                 stored = self.manifests.read()
                 if stored is None:
@@ -295,6 +320,9 @@ class IkarusBackend:
         if _vector_store._connection is not None:
             _vector_store._connection.close()
             _vector_store._connection = None
+        if getattr(self, "_read_snapshot", None) is not None:
+            self._read_snapshot.cleanup()
+            self._read_snapshot = None
 
     def workflow_cache(self):
         """Return persistent workflow caches beside this index, created on first use."""
@@ -746,6 +774,26 @@ class IkarusBackend:
         def count(sql: str) -> int:
             return int(self.connection.execute(sql).fetchone()[0])
 
+        vector_table_exists = (
+            self.connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (_VECTOR_METADATA_TABLE,),
+            ).fetchone()
+            is not None
+        )
+        vector_count = (
+            count(f"SELECT COUNT(*) FROM {_VECTOR_METADATA_TABLE}") if vector_table_exists else 0
+        )
+        missing_vector_count = (
+            count(
+                f"SELECT COUNT(*) FROM graph_nodes AS nodes "
+                f"LEFT JOIN {_VECTOR_METADATA_TABLE} AS vectors "
+                "ON vectors.identifier=nodes.identifier "
+                "WHERE nodes.kind='chunk' AND vectors.identifier IS NULL"
+            )
+            if vector_table_exists
+            else count("SELECT COUNT(*) FROM graph_nodes WHERE kind='chunk'")
+        )
         return {
             "path": str(self.path),
             "schema_version": INDEX_SCHEMA_VERSION,
@@ -754,13 +802,8 @@ class IkarusBackend:
                 "SELECT COUNT(*) FROM bibliograph_sources WHERE state IN ('indexed','empty')"
             ),
             "chunks": count("SELECT COUNT(*) FROM graph_nodes WHERE kind='chunk'"),
-            "vectors": count(f"SELECT COUNT(*) FROM {_VECTOR_METADATA_TABLE}"),
-            "missing_vectors": count(
-                f"SELECT COUNT(*) FROM graph_nodes AS nodes "
-                f"LEFT JOIN {_VECTOR_METADATA_TABLE} AS vectors "
-                "ON vectors.identifier=nodes.identifier "
-                "WHERE nodes.kind='chunk' AND vectors.identifier IS NULL"
-            ),
+            "vectors": vector_count,
+            "missing_vectors": missing_vector_count,
             "embedding_id": self.embedding_id,
             "dimension": self.embedding_dimension,
             "extraction_chunking_fingerprint": INDEXING_FINGERPRINT,

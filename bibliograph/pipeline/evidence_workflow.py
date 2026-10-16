@@ -809,7 +809,15 @@ def build_evidence_workflow(
         if ledger and refine is not None:
             proposed = refine(claim_text, ledger)
             planning_basis = "assessed evidence ledger"
-        elif not ledger and not state["candidates"] and expand is not None:
+        elif (
+            not ledger
+            and not state["candidates"]
+            and expand is not None
+            and len(state["queries"]) == 1
+        ):
+            # The initial plan already called ``expand``. Only retry it here
+            # when that plan produced no alternate queries; repeating the same
+            # model call cannot add useful work and wastes a full expansion.
             proposed = expand(claim_text)
             planning_basis = "no initial candidates; claim-only fallback expansion"
         else:

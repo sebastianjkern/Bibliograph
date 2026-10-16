@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 import hashlib
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 

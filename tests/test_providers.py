@@ -27,8 +27,8 @@ def test_domain_records_are_frozen_slotted_and_transient_shapes_are_simple():
 
 def test_registry_exposes_capability_specific_factory_names():
     assert set(embedding_names()) == {"hash", "ollama", "openai", "sentence-transformers"}
-    assert set(chat_names()) == {"codex", "ollama", "openai"}
-    assert set(names()) == set(embedding_names()) | {"codex"}
+    assert set(chat_names()) == {"codex", "mistral", "ollama", "openai"}
+    assert set(names()) == set(embedding_names()) | {"codex", "mistral"}
 
 
 def test_hash_runtime_keeps_document_and_query_encoders_separate():
@@ -172,15 +172,12 @@ def test_ollama_factories_use_native_paths_and_contextual_errors():
             return {"message": {"content": "native answer"}}
         return {"models": []}
 
-    embedding = build_embedding(
-        {"provider": "ollama", "model": "nomic", "transport": transport}
-    )
+    embedding = build_embedding({"provider": "ollama", "model": "nomic", "transport": transport})
     chat = build_chat({"provider": "ollama", "model": "llama", "transport": transport})
 
     assert embedding["embed_queries"](["one", "two"]) == [[1.0, 0.0], [0.0, 1.0]]
     assert (
-        chat["complete"]([{"role": "user", "content": "hello"}], json_mode=True)
-        == "native answer"
+        chat["complete"]([{"role": "user", "content": "hello"}], json_mode=True) == "native answer"
     )
     assert calls[:2] == [
         ("/api/embed", {"model": "nomic", "input": ["one", "two"]}),
@@ -219,9 +216,7 @@ def test_ollama_chat_sends_schema_format_when_requested():
         calls.append((path, payload))
         return {"message": {"content": "{}"}}
 
-    chat = build_chat(
-        {"provider": "ollama", "model": "chat-model", "transport": transport}
-    )
+    chat = build_chat({"provider": "ollama", "model": "chat-model", "transport": transport})
     schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
 
     chat["complete"](

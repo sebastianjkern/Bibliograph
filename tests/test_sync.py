@@ -91,7 +91,8 @@ def test_sync_forwards_indexing_phases_to_live_progress(monkeypatch):
         def stats(self):
             return {}
 
-    monkeypatch.setattr(sync_command, "Console", FakeConsole)
+    monkeypatch.setattr(sync_command, "stderr_console", FakeConsole)
+    monkeypatch.setattr("bibliograph.commands.progress.stderr_console", FakeConsole)
     monkeypatch.setattr(sync_command, "Progress", lambda *_args, **_kwargs: FakeProgress())
     monkeypatch.setattr(sync_command, "StageProgress", FakeStages)
     monkeypatch.setattr(sync_command, "resolve_collection", lambda *_args: "COLL")

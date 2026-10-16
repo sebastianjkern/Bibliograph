@@ -7,9 +7,9 @@ from typing import Any
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.text import Text
 
+from ..logging_utils import stderr_console
 from ..pipeline.retrieval import DEFAULT_SEARCH_LIMIT, search_claim
 from ..pipeline.timing import format_workflow_timings
-from ..logging_utils import stderr_console
 from ..render import render_search
 
 
@@ -27,8 +27,8 @@ def search(
 ) -> dict[str, Any]:
     progress_cm = _progress_context(show_progress)
     with progress_cm as progress:
-
         task_id = progress.add_task("Preparing search") if progress is not None else None
+
         def print_step(message: str | Text) -> None:
             if progress is not None:
                 line = Text()
@@ -60,17 +60,19 @@ def search(
                 line.append("  ↳ ", style="dim")
                 line.append(description)
                 progress.console.print(line)
-            elif description.startswith((
-                "Retrieved initial evidence",
-                "Retrieved follow-up evidence",
-                "Assessed ",
-                "Reviewed ",
-                "Extended context for",
-                "Generated ",
-                "Selected passages",
-                "Selected final evidence",
-                "Synthesis generated",
-            )):
+            elif description.startswith(
+                (
+                    "Retrieved initial evidence",
+                    "Retrieved follow-up evidence",
+                    "Assessed ",
+                    "Reviewed ",
+                    "Extended context for",
+                    "Generated ",
+                    "Selected passages",
+                    "Selected final evidence",
+                    "Synthesis generated",
+                )
+            ):
                 print_step(description)
             progress.update(
                 task_id,
@@ -146,6 +148,28 @@ def _style_relation_counts(message: str) -> Text:
     return line
 
 
+def _assessment_progress_text(message: str, suffix: str = "") -> Text:
+    """Render relation totals with dim context and colors matching the result view."""
+
+    styles = {
+        "support": "green",
+        "contradict": "red",
+        "mixed": "yellow",
+        "unresolved": "cyan",
+    }
+    pattern = re.compile(r"\b(\d+)\s+(support|contradict|mixed|unresolved)\b")
+    line = Text()
+    position = 0
+    for match in pattern.finditer(message):
+        line.append(message[position : match.start()], style="dim")
+        line.append(match.group(1), style=styles[match.group(2)])
+        line.append(" " + match.group(2), style=styles[match.group(2)])
+        position = match.end()
+    line.append(message[position:], style="dim")
+    line.append(suffix)
+    return line
+
+
 def _progress_description(description: str) -> str:
     if description.startswith("Phase "):
         return description
@@ -159,6 +183,10 @@ def _progress_description(description: str) -> str:
         return description.replace("Retrieved candidates", "Retrieved", 1)
     if description.startswith("Gathered context"):
         return description.replace("Gathered context", "Preparing source context", 1)
+    if description.startswith("Context extension"):
+        return description.replace("Context extension", "Extending local context", 1)
+    if description.startswith("Query extension"):
+        return description.replace("Query extension", "Planning follow-up queries", 1)
     if description.startswith("Reranking candidates"):
         return description.replace("Reranking candidates", "Ranking passages", 1)
     if description.startswith("Assessed evidence"):

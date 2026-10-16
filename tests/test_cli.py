@@ -71,7 +71,7 @@ def test_overview_resolves_each_stage_provider_and_active_state():
 
     assert overview == [
         ("Query expansion", "ollama", "shared-model", True),
-        ("Reranking", "ollama", "shared-model", False),
+        ("Reranking", "ollama", "nimble (default)", False),
         ("Evidence selection", "ollama", "evidence-model", True),
         ("Rationale", "codex", "gpt-6-luna", False),
     ]
@@ -101,16 +101,14 @@ def test_assessment_progress_colors_relations_and_keeps_other_text_neutral():
     assert "10 passages" in progress.plain
     assert "round 1" in progress.plain
     styled_segments = [
-        (progress.plain[span.start : span.end], span.style)
-        for span in progress.spans
+        (progress.plain[span.start : span.end], span.style) for span in progress.spans
     ]
     assert any(segment == "6" and "green" in str(style) for segment, style in styled_segments)
     assert any(segment == "1" and "red" in str(style) for segment, style in styled_segments)
     assert any(segment == "2" and "yellow" in str(style) for segment, style in styled_segments)
     assert any(segment == "1" and "cyan" in str(style) for segment, style in styled_segments)
     assert any(
-        "10 passages" in segment and "dim" in str(style)
-        for segment, style in styled_segments
+        "10 passages" in segment and "dim" in str(style) for segment, style in styled_segments
     )
 
 
@@ -132,13 +130,16 @@ def test_search_progress_uses_concise_workflow_state_labels():
     assert _progress_description("Retrieved candidates · 36 unique · 4 query variant(s)") == (
         "Retrieved · 36 unique · 4 query variant(s)"
     )
-    assert _progress_description(
-        "Context extension · round 1 · 5 passage(s) updated"
-    ) == "Extending local context · round 1 · 5 passage(s) updated"
-    assert _progress_description(
-        "Query extension · round 2 · 4 new queries · assessed evidence ledger"
-    ) == "Planning follow-up queries · round 2 · 4 new queries · assessed evidence ledger"
-
+    assert (
+        _progress_description("Context extension · round 1 · 5 passage(s) updated")
+        == "Extending local context · round 1 · 5 passage(s) updated"
+    )
+    assert (
+        _progress_description(
+            "Query extension · round 2 · 4 new queries · assessed evidence ledger"
+        )
+        == "Planning follow-up queries · round 2 · 4 new queries · assessed evidence ledger"
+    )
 
 
 def test_cli_keeps_read_workflow_shims_for_one_release():
@@ -147,19 +148,16 @@ def test_cli_keeps_read_workflow_shims_for_one_release():
     assert parser.parse_args(["find", "claim"]).command == "legacy-search"
     assert parser.parse_args(["find-sources", "claim"]).command == "legacy-search"
     assert parser.parse_args(["suggest", "draft.tex"]).command == "legacy-suggest"
-    legacy_search = parser.parse_args(
-        ["find", "claim", "--no-rerank", "--no-evidence-extraction"]
-    )
+    legacy_search = parser.parse_args(["find", "claim", "--no-rerank", "--no-evidence-extraction"])
     assert legacy_search.no_rerank is True
     assert legacy_search.no_evidence_extraction is True
     assert parser.parse_args(["search", "claim", "--verbose"]).verbose is True
     no_enrichment = parser.parse_args(["search", "claim", "--no-enrichment"])
     assert no_enrichment.no_enrichment is True
     assert _disabled_llm_stages(no_enrichment) == ("evidence", "rationale")
-    assert (
-        parser.parse_args(["suggest", "draft.tex", "--no-evidence-extraction"])
-        .no_evidence_extraction
-    )
+    assert parser.parse_args(
+        ["suggest", "draft.tex", "--no-evidence-extraction"]
+    ).no_evidence_extraction
 
 
 def test_cli_converts_runtime_flags_to_settings_overrides():
@@ -235,8 +233,9 @@ def test_legacy_check_explicitly_syncs_before_read_only_check(monkeypatch):
     )
     monkeypatch.setattr(
         "bibliograph.cli.run_check",
-        lambda settings, draft, **kwargs: calls.append(("check", {"draft": draft, **kwargs}))
-        or {"markdown": "# Check"},
+        lambda settings, draft, **kwargs: (
+            calls.append(("check", {"draft": draft, **kwargs})) or {"markdown": "# Check"}
+        ),
     )
 
     assert main(["--quiet", "check", "draft.tex", "Methods", "--rebuild-db"]) == 0
@@ -259,6 +258,8 @@ def test_legacy_check_explicitly_syncs_before_read_only_check(monkeypatch):
                 "disabled_stages": (),
                 "show_progress": False,
                 "enrich": True,
+                "workers": 2,
+                "verbose": False,
             },
         ),
     ]
@@ -269,16 +270,18 @@ def test_sync_accepts_legacy_rebuild_flag_after_the_subcommand(monkeypatch):
     monkeypatch.setattr("bibliograph.cli.load_settings", lambda *args: {"loaded": True})
     monkeypatch.setattr(
         "bibliograph.cli.run_sync",
-        lambda settings, **kwargs: calls.append((settings, kwargs))
-        or {
-            "collection": "Methods",
-            "discovered": 0,
-            "indexed": [],
-            "unchanged": [],
-            "empty": [],
-            "missing": [],
-            "downloaded": [],
-        },
+        lambda settings, **kwargs: (
+            calls.append((settings, kwargs))
+            or {
+                "collection": "Methods",
+                "discovered": 0,
+                "indexed": [],
+                "unchanged": [],
+                "empty": [],
+                "missing": [],
+                "downloaded": [],
+            }
+        ),
     )
 
     assert main(["--quiet", "sync", "Methods", "--reset-pdf-index"]) == 0
@@ -290,6 +293,7 @@ def test_sync_accepts_legacy_rebuild_flag_after_the_subcommand(monkeypatch):
                 "rebuild": False,
                 "show_progress": False,
                 "force_reindex": True,
+                "verbose": False,
             },
         )
     ]

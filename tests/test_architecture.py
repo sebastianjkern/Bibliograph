@@ -34,6 +34,7 @@ def _hash_settings(db: str) -> dict:
         },
         "llm": {"provider": "ollama", "model": "unused", "mode": "off", "stages": []},
         "acquisition": {"order": []},
+        "pdf_extraction": {"provider": "pymupdf"},
     }
 
 
@@ -59,17 +60,14 @@ def _seed_ikarus_store(path: Path) -> None:
             "A1",
             1,
             __file__,
-            extract_pages=lambda _path: [
-                (1, "Road quality changes trade outcomes.", "Results")
-            ],
+            extract_pages=lambda _path: [(1, "Road quality changes trade outcomes.", "Results")],
         )
 
 
 def test_indexing_pipeline_batches_before_transactional_replacement():
     paper = Paper("P1", "A paper")
     chunks = [
-        Chunk(f"P1:1:{index}", paper, f"Evidence {index}", ordinal=index)
-        for index in range(5)
+        Chunk(f"P1:1:{index}", paper, f"Evidence {index}", ordinal=index) for index in range(5)
     ]
     batches = []
     embeds = []
@@ -173,6 +171,7 @@ def test_one_fake_chat_runtime_serves_all_llm_tasks():
         },
         "quote_role": "finding",
         "quote_directness": "direct",
+        "components": [],
     }
     assert llm_tasks.explain("claim", chunk.text, complete=complete) == "Direct support."
     explanation_prompt = "\n".join(message["content"] for message in explanation_prompts[0])
@@ -211,7 +210,7 @@ def test_rerank_scores_direct_entailment_above_topical_objective():
             '"evidence_role":"result","claim_specificity":0.95,'
             '"result_presence":1.0,"primary_source":1.0,"background_penalty":0.0,'
             '"secondary_citation_penalty":0.0,"unsupported_inference_penalty":0.0}'
-            ']}'
+            "]}"
         )
 
     ranked = llm_tasks.rerank(
@@ -304,6 +303,7 @@ def test_select_evidence_returns_explicit_contradicting_relation_and_validates_q
         },
         "quote_role": "finding",
         "quote_directness": "direct",
+        "components": [],
     }
 
 
@@ -335,10 +335,7 @@ def test_select_evidence_reports_partial_support_for_population_scope_mismatch()
 def test_select_evidence_downgrades_topical_methods_quote_to_insufficient():
     paper = Paper("P1", "Mechanisms study")
     method_quote = "Our specification regresses nightlights emitted along this road on attacks."
-    context = (
-        "Conflict has a statistically significant effect on maize prices. "
-        f"{method_quote}"
-    )
+    context = f"Conflict has a statistically significant effect on maize prices. {method_quote}"
     chunk = Chunk("P1:1", paper, context)
     prompts = []
 
@@ -388,10 +385,7 @@ def test_select_evidence_rejects_publisher_address_quotes():
 
 def test_rerank_chunks_all_candidates_into_prompts_of_at_most_ten():
     paper = Paper("P1", "A paper")
-    hits = [
-        (Chunk(f"P1:{index}:0", paper, f"Evidence {index}."), 0.5)
-        for index in range(11)
-    ]
+    hits = [(Chunk(f"P1:{index}:0", paper, f"Evidence {index}."), 0.5) for index in range(11)]
     calls = []
 
     def complete(messages, *, json_mode=False):
@@ -407,10 +401,7 @@ def test_rerank_chunks_all_candidates_into_prompts_of_at_most_ten():
 
 def test_rerank_batches_run_concurrently_and_keep_batch_order():
     paper = Paper("P1", "A paper")
-    hits = [
-        (Chunk(f"P1:{index}:0", paper, f"Evidence {index}."), 0.5)
-        for index in range(11)
-    ]
+    hits = [(Chunk(f"P1:{index}:0", paper, f"Evidence {index}."), 0.5) for index in range(11)]
     lock = Lock()
     active = 0
     maximum_active = 0
@@ -477,10 +468,18 @@ def test_sync_never_constructs_a_chat_provider(monkeypatch):
             "bibliograph.bootstrap.build_chat",
             lambda _settings: (_ for _ in ()).throw(AssertionError("chat must not be built")),
         )
-        monkeypatch.setattr(
-            "bibliograph.bootstrap.sync_library",
-            lambda *_args, **_kwargs: {"indexed": [], "collection": "Collection"},
-        )
+
+        def fake_sync(_settings, *, store, **_kwargs):
+            store.index_pdf(
+                Paper("P1", "A paper"),
+                "A1",
+                1,
+                __file__,
+                extract_pages=lambda _path: [(1, "Evidence for a successful sync.", "Results")],
+            )
+            return {"indexed": ["A1"], "collection": "Collection"}
+
+        monkeypatch.setattr("bibliograph.bootstrap.sync_library", fake_sync)
 
         result = bootstrap.run_sync(settings)
 
@@ -494,11 +493,12 @@ def test_optional_llm_initialization_failure_uses_configured_fallbacks(monkeypat
         "model": "missing",
         "mode": "optional",
         "stages": ["rerank", "evidence", "rationale"],
+        "rerank_strategy": "llm",
     }
     paper = Paper("P1", "A paper")
     hit = (Chunk("P1:1:0", paper, "Supporting text."), 0.4)
     monkeypatch.setattr(
-        "bibliograph.bootstrap.build_chat",
+        "bibliograph.pipeline.llm_tools.build_chat",
         lambda _settings: (_ for _ in ()).throw(RuntimeError("LLM unavailable")),
     )
 
@@ -506,7 +506,10 @@ def test_optional_llm_initialization_failure_uses_configured_fallbacks(monkeypat
 
     assert set(tools) == {"rerank", "select_evidence", "explain"}
     assert tools["rerank"]("claim", [hit]) == [hit]
-    assert tools["select_evidence"]("claim", hit, hit[0].text) is None
+    unavailable = tools["select_evidence"]("claim", hit, hit[0].text)
+    assert unavailable["relation"] == "unavailable"
+    assert unavailable["assessment_status"] == "provider_unavailable"
+    assert unavailable["__cacheable__"] is False
     assert tools["explain"]("claim", hit[0].text) == (
         "Retrieved evidence overlaps with the draft passage; verify the source before citing."
     )
@@ -552,17 +555,17 @@ def test_llm_stage_provider_and_model_overrides_use_distinct_cached_runtimes(mon
         configured.append(config["llm"].copy())
         return {"complete": lambda *_args, **_kwargs: "{}"}
 
-    monkeypatch.setattr("bibliograph.bootstrap.build_chat", build_chat)
+    monkeypatch.setattr("bibliograph.pipeline.llm_tools.build_chat", build_chat)
 
     tools = bootstrap._llm_tools(settings)
 
     assert set(tools) == {"expand", "refine", "rerank", "select_evidence", "explain"}
     assert [(item["provider"], item["model"]) for item in configured] == [
-        ("ollama", "shared-model"),
         ("ollama", "expand-model"),
         ("openai", "evidence-model"),
+        ("ollama", "shared-model"),
     ]
-    assert configured[2]["base_url"] == "http://ollama.test"
+    assert configured[1]["base_url"] == "http://ollama.test"
 
 
 def test_query_expansion_parses_typed_alternatives():
@@ -570,11 +573,13 @@ def test_query_expansion_parses_typed_alternatives():
 
     result = expand_query(
         "Road quality affects market access.",
-        complete=lambda _messages, json_mode=False: '{"items": ['
-        '{"type": "paraphrase", "text": "Transport infrastructure affects market access"},'
-        '{"type": "not-a-type", "text": "Ignore this"},'
-        '{"type": "causal", "text": "Better roads reduce travel costs and improve access"}'
-        "]}",
+        complete=lambda _messages, json_mode=False: (
+            '{"items": ['
+            '{"type": "paraphrase", "text": "Transport infrastructure affects market access"},'
+            '{"type": "not-a-type", "text": "Ignore this"},'
+            '{"type": "causal", "text": "Better roads reduce travel costs and improve access"}'
+            "]}"
+        ),
     )
 
     assert result == [
@@ -606,10 +611,10 @@ def test_required_llm_initialization_failure_propagates(monkeypatch):
         "provider": "ollama",
         "model": "missing",
         "mode": "required",
-        "stages": ["rerank"],
+        "stages": ["evidence"],
     }
     monkeypatch.setattr(
-        "bibliograph.bootstrap.build_chat",
+        "bibliograph.pipeline.llm_tools.build_chat",
         lambda _settings: (_ for _ in ()).throw(RuntimeError("LLM unavailable")),
     )
 

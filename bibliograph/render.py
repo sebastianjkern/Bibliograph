@@ -62,9 +62,7 @@ def render_check(items: Iterable[dict], *, verbose: bool = False) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_claim_synthesis(
-    synthesis: dict, *, heading: str = "### Claim assessment"
-) -> list[str]:
+def _render_claim_synthesis(synthesis: dict, *, heading: str = "### Claim assessment") -> list[str]:
     assessed_papers = int(synthesis.get("study_count", synthesis.get("paper_count", 0)))
     assessed_passages = int(synthesis.get("passage_count", 0))
     components = synthesis.get("claim_coverage", [])
@@ -77,12 +75,15 @@ def _render_claim_synthesis(
     }
     quoted_count = len(quoted_papers)
     quoted_label = "distinct source paper" if quoted_count == 1 else "distinct source papers"
-    assessed_paper_label = "distinct source paper" if assessed_papers == 1 else "distinct source papers"
+    assessed_paper_label = (
+        "distinct source paper" if assessed_papers == 1 else "distinct source papers"
+    )
     assessed_passage_label = "passage" if assessed_passages == 1 else "passages"
     lines = ([heading, ""] if heading else []) + [
         f"**Evidence base:** {quoted_count} {quoted_label} cited in claim coverage.",
-        f"**Assessment scope:** {assessed_passages} {assessed_passage_label} from {assessed_papers} "
-        f"{assessed_paper_label} assessed; these counts describe review scope, not the verdict.",
+        f"**Assessment scope:** {assessed_passages} {assessed_passage_label} from "
+        f"{assessed_papers} {assessed_paper_label} assessed; these counts describe review scope, "
+        "not the verdict.",
     ]
     if components:
         lines.extend(["", "**Claim coverage:**", ""])
@@ -130,9 +131,7 @@ def _compact_reason(reason: str, limit: int = 220) -> str:
     return shortened + "…"
 
 
-def _colorize_evidence_quote(
-    evidence: dict, component_status: str, *, quoted: bool = False
-) -> str:
+def _colorize_evidence_quote(evidence: dict, component_status: str, *, quoted: bool = False) -> str:
     """Emphasize only quoted evidence with an assessed claim relation."""
     status = str(evidence.get("status") or component_status).casefold()
     marker = {
@@ -167,14 +166,12 @@ def _passage_coverage_accounting(summary: str) -> str:
         for label in ("supporting", "partial", "contradicting", "mixed", "unresolved")
     }
     counts = [
-        f"{match.group(1) if match else '0'} {label}"
-        for label, match in relation_counts.items()
+        f"{match.group(1) if match else '0'} {label}" for label, match in relation_counts.items()
     ]
     paper_count = int(evidence.group(1))
     paper_label = "paper" if paper_count == 1 else "papers"
-    return (
-        f"{paper_count} {paper_label} · {evidence.group(2)} passages"
-        + (" · " + " · ".join(counts) if counts else "")
+    return f"{paper_count} {paper_label} · {evidence.group(2)} passages" + (
+        " · " + " · ".join(counts) if counts else ""
     )
 
 

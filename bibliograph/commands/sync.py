@@ -2,12 +2,10 @@
 
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import nullcontext
-
 from pathlib import Path
 from typing import Any
 
 from rich.progress import (
-    BarColumn,
     Progress,
     SpinnerColumn,
     TaskProgressColumn,
@@ -122,9 +120,7 @@ def sync_library(
             if stages is not None:
                 stages.update(f"{prefix} Extract and index · {title}")
             document_progress = (
-                _document_progress_callback(stages, prefix, title)
-                if stages is not None
-                else None
+                _document_progress_callback(stages, prefix, title) if stages is not None else None
             )
             result = index_available_document(
                 store,
@@ -164,7 +160,6 @@ def _document_progress_callback(stages: StageProgress, prefix: str, title: str):
         stages.update(f"{prefix} {message} · {title}")
 
     return report
-
 
 
 def _attempt_detail(attempts: Iterable[Mapping[str, Any]]) -> str:

@@ -17,6 +17,8 @@ __pycache__/
 .ruff_cache
 .pytest_cache
 .pytest-codex
+.coverage
+coverage.xml
 .scannerwork/
 .agents
 
