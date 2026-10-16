@@ -55,6 +55,7 @@ class EvidenceState(TypedDict):
     refinement_round: int
     candidates: dict[str, ScoredChunk]
     candidate_queries: dict[str, list[str]]
+    counter_queries: list[str]
     score_details: dict[str, dict[str, float]]
     query_traces: list[dict[str, object]]
     contexts: dict[str, str]
@@ -293,6 +294,7 @@ def build_evidence_workflow(
             "refinement_round": 0,
             "candidates": {},
             "candidate_queries": {},
+            "counter_queries": [],
             "score_details": {},
             "query_traces": [],
             "assessment_results": {},
@@ -310,6 +312,13 @@ def build_evidence_workflow(
         score_details = dict(state["score_details"])
         query_traces = list(state["query_traces"])
         pending = state["pending_queries"]
+        counter_queries = list(state.get("counter_queries", []))
+        if state["refinement_round"] == 0 and select_evidence is not None:
+            claim_text = state["claim"]["text"].strip()
+            generated = [f"{claim_text} no effect", f"{claim_text} opposite effect"]
+            known = {query.casefold() for query in state["queries"]}
+            counter_queries.extend(query for query in generated if query.casefold() not in known)
+            pending = list(dict.fromkeys([*pending, *counter_queries]))
         existing_ids = set(candidates)
         retrieval_kind = "initial" if state["refinement_round"] == 0 else "follow-up"
         query_vectors: dict[str, Sequence[float]] = {}
@@ -380,6 +389,7 @@ def build_evidence_workflow(
             "score_details": score_details,
             "query_traces": query_traces,
             "pending_queries": [],
+            "counter_queries": counter_queries,
         }
 
     def gather_context(state: EvidenceState) -> dict:
@@ -520,6 +530,19 @@ def build_evidence_workflow(
             component_names = _component_names(assessment_results)
             phase_name = "Assess" if assessment_pass == 1 else "Review"
             provisional = sorted(candidates, key=lambda hit: hit[1], reverse=True)[:finalist_count]
+            counter_query_set = {query.casefold() for query in state.get("counter_queries", [])}
+            counter_candidates = [
+                hit
+                for hit in candidates
+                if any(
+                    query.casefold() in counter_query_set
+                    for query in state["candidate_queries"].get(hit[0].chunk_id, [])
+                )
+            ]
+            provisional_ids = {hit[0].chunk_id for hit in provisional}
+            provisional.extend(
+                hit for hit in counter_candidates[:2] if hit[0].chunk_id not in provisional_ids
+            )
             if assessment_pass == 1:
                 report(f"Phase 3/5 · Assess evidence · up to {finalist_count} candidate passages")
             else:
@@ -653,6 +676,10 @@ def build_evidence_workflow(
 
             finalists = ranked[:finalist_count]
             finalist_ids = {hit[0].chunk_id for hit in finalists}
+            for hit in counter_candidates:
+                if hit[0].chunk_id not in finalist_ids and len(finalist_ids) < finalist_count + 2:
+                    finalists.append(hit)
+                    finalist_ids.add(hit[0].chunk_id)
             missing_finalists = [
                 hit for hit in finalists if hit[0].chunk_id not in prepared_results
             ]
@@ -948,6 +975,11 @@ def build_evidence_workflow(
             "retrieval_trace": retrieval_trace,
             "query_traces": traces,
             "candidate_queries": state["candidate_queries"],
+            "counter_queries": tuple(state.get("counter_queries", [])),
+            "mixed_evidence": (
+                any(item.get("evidence_relation") == "supports" for item in items)
+                and any(item.get("evidence_relation") == "contradicts" for item in items)
+            ),
             "refinement_rounds": state["refinement_round"],
             "refinement_trace": state["refinement_trace"],
             "evidence_ledger": _evidence_ledger(state),

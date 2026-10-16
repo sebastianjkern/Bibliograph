@@ -605,6 +605,8 @@ def test_langgraph_search_refines_queries_from_retrieved_context():
 
     assert [request.text for request, _limit, _trace in requests] == [
         "Claim about treatment and outcome",
+        "Claim about treatment and outcome no effect",
+        "Claim about treatment and outcome opposite effect",
         "treatment effect on measured outcome",
     ]
     assert all(limit == 20 and include_trace for _request, limit, include_trace in requests)
@@ -617,8 +619,14 @@ def test_langgraph_search_refines_queries_from_retrieved_context():
     assert result["refinement_rounds"] == 1
     assert result["refinement_trace"][0]["queries"] == ["treatment effect on measured outcome"]
     assert result["candidate_queries"][followup.chunk_id] == [
-        "treatment effect on measured outcome"
+        "Claim about treatment and outcome no effect",
+        "Claim about treatment and outcome opposite effect",
+        "treatment effect on measured outcome",
     ]
+    assert result["counter_queries"] == (
+        "Claim about treatment and outcome no effect",
+        "Claim about treatment and outcome opposite effect",
+    )
     supported_item = next(item for item in result["items"] if item["chunk"] == followup)
     expected_context = (
         "Adjacent context clarifies the terminology. The treatment increased the measured outcome."
